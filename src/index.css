@@ -1,0 +1,93 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 40 33% 96%;
+    --foreground: 220 40% 13%;
+
+    --card: 40 25% 97%;
+    --card-foreground: 220 40% 13%;
+
+    --popover: 40 25% 97%;
+    --popover-foreground: 220 40% 13%;
+
+    --primary: 220 55% 15%;
+    --primary-foreground: 40 33% 96%;
+
+    --secondary: 210 20% 92%;
+    --secondary-foreground: 220 40% 13%;
+
+    --muted: 210 15% 90%;
+    --muted-foreground: 220 10% 45%;
+
+    --accent: 355 80% 45%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 220 15% 85%;
+    --input: 220 15% 85%;
+    --ring: 220 55% 15%;
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 220 55% 15%;
+    --sidebar-foreground: 40 33% 96%;
+    --sidebar-primary: 355 80% 45%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 45% 22%;
+    --sidebar-accent-foreground: 40 33% 96%;
+    --sidebar-border: 220 45% 22%;
+    --sidebar-ring: 355 80% 45%;
+
+    --success: 145 60% 40%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 90% 50%;
+    --warning-foreground: 220 40% 13%;
+  }
+
+  .dark {
+    --background: 220 40% 8%;
+    --foreground: 40 20% 92%;
+    --card: 220 35% 12%;
+    --card-foreground: 40 20% 92%;
+    --popover: 220 35% 12%;
+    --popover-foreground: 40 20% 92%;
+    --primary: 40 33% 96%;
+    --primary-foreground: 220 55% 15%;
+    --secondary: 220 30% 18%;
+    --secondary-foreground: 40 20% 92%;
+    --muted: 220 25% 18%;
+    --muted-foreground: 220 10% 55%;
+    --accent: 355 80% 50%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 220 25% 20%;
+    --input: 220 25% 20%;
+    --ring: 40 33% 96%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.8); opacity: 0.8; }
+  50% { transform: scale(1.2); opacity: 0.3; }
+  100% { transform: scale(0.8); opacity: 0.8; }
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 1.5s ease-in-out infinite;
+}
