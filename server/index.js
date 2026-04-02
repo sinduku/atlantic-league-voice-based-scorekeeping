@@ -19,6 +19,8 @@ if (!OPENAI_API_KEY) {
 }
 
 app.post("/api/parse-play", async (req, res) => {
+  const startTotal = Date.now(); // timing 
+
   try {
     const { transcript, gameState } = req.body;
 
@@ -26,44 +28,35 @@ app.post("/api/parse-play", async (req, res) => {
       return res.status(400).json({ error: "transcript is required" });
     }
 
-    const systemPrompt = `You are a baseball scorekeeping assistant for the Atlantic League. Parse the user's voice transcript into a structured baseball play.
+  // added a shorter prompt that asks for bare bones JSON 
+    const systemPrompt = `You are a baseball scorekeeping assistant. Parse voice transcripts into structured plays.
 
-CURRENT GAME STATE:
-${gameState ? `- Inning: ${gameState.half} of ${gameState.inning}
-- Outs: ${gameState.outs}
-- Runner on 1st: ${gameState.runners?.first || "none"}
-- Runner on 2nd: ${gameState.runners?.second || "none"}
-- Runner on 3rd: ${gameState.runners?.third || "none"}
-- Score: Away ${gameState.score?.away || 0} - Home ${gameState.score?.home || 0}` : "No game state provided (start of game)"}
+CURRENT STATE: ${gameState ? `Inning ${gameState.half} ${gameState.inning}, ${gameState.outs} outs, Score: Away ${gameState.score?.away || 0}-Home ${gameState.score?.home || 0}, Runners: 1B=${gameState.runners?.first || "empty"} 2B=${gameState.runners?.second || "empty"} 3B=${gameState.runners?.third || "empty"}` : "Start of game"}
 
-IMPORTANT: Use the current game state to correctly determine runner movements. If a runner is already on a base and the batter reaches that base, the existing runner must advance. Account for force plays and tag-ups on fly balls.
+RULES: Account for force plays. All runners must be included in movement array.
 
-Return ONLY valid JSON with no markdown, no code blocks, no extra text. Use this exact structure:
-
+Return ONLY valid JSON (no markdown, no backticks):
 {
-  "inning": number or null,
-  "half": "top" or "bottom" or null,
-  "batter": string or null,
-  "pitcher": string or null,
-  "action": string (e.g. "single", "strikeout", "fly out", "home run", "walk", "double", "triple", "ground out", "sacrifice fly", "hit by pitch", "error", "fielder's choice", "stolen base", "wild pitch", "passed ball", "balk"),
-  "description": string (a clean, concise description of the play),
-  "runners": [{ "from": string, "to": string, "runner": string or null }],
+  "inning": number,
+  "half": "top"|"bottom",
+  "batter": string,
+  "pitcher": string,
+  "action": "single"|"double"|"triple"|"home run"|"strikeout"|"walk"|"fly out"|"ground out"|"hit by pitch"|"error"|"fielder's choice"|"stolen base"|"wild pitch"|"passed ball"|"balk"|"sacrifice fly",
+  "description": string,
+  "runners": [{"from": string, "to": string, "runner": string}],
   "rbi": number,
   "outs_recorded": number,
   "fielders_involved": string[],
-  "hit_location": string or null (where the ball was hit, e.g. "left field", "right-center gap", "shortstop hole", "third base line"),
-  "hit_type": string or null (how the ball was hit, e.g. "ground ball", "line drive", "fly ball", "pop up", "bunt"),
-  "hit_hardness": string or null (contact quality, e.g. "hard", "soft", "medium"),
-  "field_zone": number or null (spray chart zone 1-9: 1=left line, 2=left, 3=left-center, 4=center, 5=right-center, 6=right, 7=right line, 8=infield left, 9=infield right),
-  "pitch_type": string or null (e.g. "fastball", "curveball", "slider", "changeup"),
-  "pitch_location": string or null (e.g. "inside", "outside", "high", "low", "down the middle"),
-  "count": string or null (ball-strike count, e.g. "2-1", "3-2"),
-  "confidence": "high" or "medium" or "low"
-}
-
-Include ALL runner movements in the "runners" array — both existing base runners AND the batter. For example, if a runner is on first and the batter singles, include both the runner advancing from first and the batter going to first.
-
-If unclear, still parse it and set confidence to "low". Return ONLY the JSON object, nothing else.`;
+  "hit_location": string,
+  "hit_type": "ground ball"|"line drive"|"fly ball"|"pop up"|"bunt",
+  "hit_hardness": "soft"|"medium"|"hard",
+  "field_zone": number,
+  "pitch_type": string,
+  "pitch_location": "inside"|"outside"|"high"|"low"|"middle",
+  "count": string,
+  "confidence": "high"|"medium"|"low"
+}`;
+    const startFetch = Date.now(); // timing 
 
     const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
       method: "POST",
@@ -77,8 +70,15 @@ If unclear, still parse it and set confidence to "low". Return ONLY the JSON obj
           { role: "system", content: systemPrompt },
           { role: "user", content: transcript },
         ],
+        // added parameters to reduce token usage + response time
+        num_predict: 300,
+        temperature: 0.1,
+        top_p: 0.9,
+        top_k: 40,
       }),
     });
+
+    const fetchTime = Date.now() - startFetch; //timing
 
     if (!response.ok) {
       const text = await response.text();
@@ -86,7 +86,9 @@ If unclear, still parse it and set confidence to "low". Return ONLY the JSON obj
       return res.status(response.status).json({ error: "AI processing failed" });
     }
 
+    const startDataParse = Date.now(); // timing
     const data = await response.json();
+    const dataParse = Date.now() - startDataParse; // timing
     const content = data.choices?.[0]?.message?.content;
 
     if (!content) {
@@ -94,10 +96,35 @@ If unclear, still parse it and set confidence to "low". Return ONLY the JSON obj
       return res.status(500).json({ error: "No content returned from AI" });
     }
 
-    const cleaned = content.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+    const startClean = Date.now(); // timing
+const cleaned = content
+  .replace(/```json\n?/g, "")
+  .replace(/```\n?/g, "")
+  .replace(/^[\s\S]*?({[\s\S]*})[\s\S]*$/, "$1")
+  .trim(); 
+    const cleanTime = Date.now() - startClean; // timing
 
     try {
+      const startJSONParse = Date.now(); // timing
       const play = JSON.parse(cleaned);
+
+      const jsonParseTime = Date.now() - startJSONParse; // timing
+      const totalTime = Date.now() - startTotal; // timing
+
+      // detailed timing breakdown for debugging 
+      // main issues are with network + interference; likely because i am working on a macbook air
+      // note that i am using ollama locally, which might be better for us  
+           console.log(`
+   TIMING BREAKDOWN:
+   Fetch (network + inference): ${fetchTime}ms
+   Response parsing: ${dataParse}ms
+   String cleaning: ${cleanTime}ms
+   JSON parsing: ${jsonParseTime}ms
+   ─────────────────────────
+   TOTAL: ${totalTime}ms
+      `);
+      
+
       return res.json({ play });
     } catch (parseErr) {
       console.error("JSON parse error:", parseErr, "Raw content:", content);
@@ -118,3 +145,4 @@ app.listen(PORT, () => {
   console.log(`   Model: ${AI_MODEL}`);
   console.log(`   API:   ${AI_BASE_URL}\n`);
 });
+
