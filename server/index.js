@@ -1,4 +1,5 @@
 require("dotenv").config();
+const { validatePlay } = require("./validatePlay");
 const express = require("express");
 const cors = require("cors");
 
@@ -103,33 +104,26 @@ const cleaned = content
   .replace(/^[\s\S]*?({[\s\S]*})[\s\S]*$/, "$1")
   .trim(); 
     const cleanTime = Date.now() - startClean; // timing
+// rejects a bad json 
+let rawPlay;
+try {
+  rawPlay = JSON.parse(cleaned);
+} catch (parseErr) {
+  console.error("JSON parse error:", parseErr, "Raw content:", content);
+  return res.status(500).json({ error: "Could not parse AI response as JSON" });
+}
+// rejects a bad play or patches a play with missing fields
+const result = validatePlay(rawPlay);
+if (!result.ok) {
+  console.error("Play failed validation:", result.reason, "Raw:", rawPlay);
+  return res.status(422).json({ error: "AI response didn't include a valid play. Try rephrasing." });
+}
 
-    try {
-      const startJSONParse = Date.now(); // timing
-      const play = JSON.parse(cleaned);
+if (result.patched) {
+  console.warn("Play had to be patched, forcing low confidence:", result.play);
+}
 
-      const jsonParseTime = Date.now() - startJSONParse; // timing
-      const totalTime = Date.now() - startTotal; // timing
-
-      // detailed timing breakdown for debugging 
-      // main issues are with network + interference; likely because i am working on a macbook air
-      // note that i am using ollama locally, which might be better for us  
-           console.log(`
-   TIMING BREAKDOWN:
-   Fetch (network + inference): ${fetchTime}ms
-   Response parsing: ${dataParse}ms
-   String cleaning: ${cleanTime}ms
-   JSON parsing: ${jsonParseTime}ms
-   ─────────────────────────
-   TOTAL: ${totalTime}ms
-      `);
-      
-
-      return res.json({ play });
-    } catch (parseErr) {
-      console.error("JSON parse error:", parseErr, "Raw content:", content);
-      return res.status(500).json({ error: "Could not parse AI response as JSON" });
-    }
+return res.json({ play: result.play, patched: result.patched });
   } catch (e) {
     console.error("parse-play error:", e);
     return res.status(500).json({ error: e.message || "Unknown error" });
