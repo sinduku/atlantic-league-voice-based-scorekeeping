@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
 import { PlayCard } from "@/components/PlayCard";
 import { SprayChart } from "@/components/SprayChart";
 import { Scoreboard } from "@/components/Scoreboard";
 import { toast } from "sonner";
+import { createGame, savePlay, type SaveResult } from "@/lib/persistence";
 import { type Play, type GameState, INITIAL_GAME_STATE, applyPlayToState } from "@/types/game";
 
 const Index = () => {
@@ -12,6 +13,25 @@ const Index = () => {
   const [lastTranscript, setLastTranscript] = useState("");
   const [confirmedPlays, setConfirmedPlays] = useState<Play[]>([]);
   const [gameState, setGameState] = useState<GameState>(INITIAL_GAME_STATE);
+  const [savedCount, setSavedCount] = useState(0);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // holds the in-flight (or finished) game insert so rapid confirmations share
+  // one game row instead of each creating their own
+  const gameRequest = useRef<Promise<SaveResult<string>> | null>(null);
+
+  const ensureGame = async () => {
+    if (!gameRequest.current) {
+      gameRequest.current = createGame();
+    }
+    const result = await gameRequest.current;
+    // a failed insert shouldn't poison the rest of the game, so let the next
+    // confirmed play try again
+    if (!result.ok) {
+      gameRequest.current = null;
+    }
+    return result;
+  };
 
   const handleTranscript = async (transcript: string) => {
     setLastTranscript(transcript);
@@ -45,13 +65,32 @@ const Index = () => {
     }
   };
 
-  const handleConfirm = () => {
-    if (currentPlay) {
-      setConfirmedPlays((prev) => [currentPlay, ...prev]);
-      setGameState((prev) => applyPlayToState(prev, currentPlay));
-      toast.success("Play confirmed!");
-      setCurrentPlay(null);
-      setLastTranscript("");
+  const handleConfirm = async () => {
+    if (!currentPlay) return;
+
+    // the play is accepted locally first so the scoreboard never waits on the
+    // network; persistence catches up behind it
+    const play = currentPlay;
+    const playIndex = confirmedPlays.length;
+
+    setConfirmedPlays((prev) => [play, ...prev]);
+    setGameState((prev) => applyPlayToState(prev, play));
+    toast.success("Play confirmed!");
+    setCurrentPlay(null);
+    setLastTranscript("");
+
+    const game = await ensureGame();
+    if (!game.ok) {
+      setSaveError(game.error);
+      return;
+    }
+
+    const saved = await savePlay(game.data, playIndex, play);
+    if (saved.ok) {
+      setSavedCount((prev) => prev + 1);
+      setSaveError(null);
+    } else {
+      setSaveError(saved.error);
     }
   };
 
@@ -65,6 +104,10 @@ const Index = () => {
     setConfirmedPlays([]);
     setCurrentPlay(null);
     setLastTranscript("");
+    // drop the old game row so the next play opens a fresh one
+    gameRequest.current = null;
+    setSavedCount(0);
+    setSaveError(null);
     toast.success("New game started!");
   };
 
@@ -92,6 +135,19 @@ const Index = () => {
       <main className="max-w-2xl mx-auto px-4 py-8 space-y-8">
         {/* Scoreboard */}
         <Scoreboard state={gameState} />
+
+        {/* Whether confirmed plays are actually reaching the database */}
+        {(savedCount > 0 || saveError) && (
+          <div
+            className={`rounded-lg px-3 py-2 text-xs ${
+              saveError ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"
+            }`}
+          >
+            {saveError
+              ? `Not saving to database: ${saveError}`
+              : `${savedCount} ${savedCount === 1 ? "play" : "plays"} saved to database`}
+          </div>
+        )}
 
         {/* Voice recorder */}
         <VoiceRecorder onTranscriptReady={handleTranscript} isProcessing={isProcessing} />

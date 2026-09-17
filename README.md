@@ -66,6 +66,59 @@ AI_MODEL=llama3
 - 🎯 Spray chart visualization
 - 📋 Play-by-play log with confirmation flow
 
+## Database (Supabase)
+
+Confirmed plays are saved to the `games` and `plays` tables. Scoring still works
+if the database is unreachable — saving happens behind the live scoreboard and a
+failure only shows a note under the scoreboard.
+
+| Table | Columns |
+|---|---|
+| `games` | `id`, `created_at`, `updated_at`, `home_team`, `away_team`, `user_id` |
+| `plays` | `id`, `game_id`, `created_at`, `play_index`, `data`, `user_id` |
+
+`plays.data` holds the whole validated play as JSON, and `play_index` keeps the
+log in order.
+
+### One-time setup
+
+These tables ship with Row Level Security enabled and no policies, so every write
+is rejected until you add them. The app has no sign-in, so it writes as the
+`anon` role. Run this once in the Supabase dashboard under **SQL Editor**:
+
+```sql
+-- plays are recorded without a signed-in user
+alter table public.games alter column user_id drop not null;
+alter table public.plays alter column user_id drop not null;
+
+drop policy if exists "anon can insert games" on public.games;
+drop policy if exists "anon can read games" on public.games;
+drop policy if exists "anon can delete games" on public.games;
+create policy "anon can insert games" on public.games for insert to anon with check (true);
+create policy "anon can read games" on public.games for select to anon using (true);
+create policy "anon can delete games" on public.games for delete to anon using (true);
+
+drop policy if exists "anon can insert plays" on public.plays;
+drop policy if exists "anon can read plays" on public.plays;
+drop policy if exists "anon can delete plays" on public.plays;
+create policy "anon can insert plays" on public.plays for insert to anon with check (true);
+create policy "anon can read plays" on public.plays for select to anon using (true);
+create policy "anon can delete plays" on public.plays for delete to anon using (true);
+```
+
+These policies let anyone holding the publishable key read and write the tables,
+which is fine for a demo. Add authentication and scope the policies to
+`auth.uid() = user_id` before using this with real data.
+
+### Verifying it works
+
+```bash
+npm run check:supabase
+```
+
+It writes a game and a play, reads them back, deletes them, and prints what
+failed if anything did.
+
 ## Configuration
 
 | Env Variable | Where | Description |

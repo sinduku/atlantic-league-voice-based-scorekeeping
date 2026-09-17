@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:supabase": "node scripts/check-supabase.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

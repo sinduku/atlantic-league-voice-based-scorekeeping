@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# local secrets - server/.env holds the AI provider API key
+server/.env
+.env.local
+.env.*.local
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
