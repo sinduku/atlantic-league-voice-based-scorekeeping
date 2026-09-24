@@ -11,7 +11,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check:supabase": "node scripts/check-supabase.mjs"
+    "check:supabase": "node scripts/check-supabase.mjs",
+    "data:pull": "node scripts/pull-gameday-plays.mjs",
+    "data:attach": "node scripts/attach-transcripts.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
