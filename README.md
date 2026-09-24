@@ -119,6 +119,35 @@ npm run check:supabase
 It writes a game and a play, reads them back, deletes them, and prints what
 failed if anything did.
 
+## Scorekeeping shorthand
+
+Scorekeepers do not speak in full sentences. They say "6-4-3", "E5", "F8",
+"K looking". `server/phrasings.js` teaches the model that vocabulary: it holds
+the position numbers, the spray chart zones, and a set of worked
+transcript-to-JSON examples that are injected into the system prompt.
+
+```js
+"E5" -> { action: "error", fielders_involved: ["5"], field_zone: 6, ... }
+```
+
+Two numbering systems are in play and they are not the same:
+
+- **Position numbers** (`fielders_involved`): 1 pitcher, 2 catcher, 3 first, 4 second,
+  5 third, 6 shortstop, 7 left, 8 center, 9 right.
+- **Spray chart zones** (`field_zone`): where the ball landed, 1 left field line
+  through 9 infield. These must match `ZONE_COORDS` in
+  `src/components/SprayChart.tsx`, because that component is what plots the dot.
+  A test fails if the two drift apart.
+
+Adding a phrasing means adding one entry to `EXAMPLES`. Run the tests after:
+
+```bash
+cd server; npm test
+```
+
+Every example is checked against the real validator, and the RBI and out counts
+are cross-checked against the runner movements.
+
 ## Configuration
 
 | Env Variable | Where | Description |
@@ -127,4 +156,5 @@ failed if anything did.
 | `AI_BASE_URL` | `server/.env` | API endpoint URL |
 | `AI_MODEL` | `server/.env` | Model name |
 | `PORT` | `server/.env` | Backend port (default: 3001) |
+| `FEWSHOT_EXAMPLES` | `server/.env` | Worked examples added to the prompt (default: 8, `0` disables) |
 | `VITE_API_URL` | Frontend `.env` | Backend URL (default: `http://localhost:3001`) |

@@ -1,5 +1,6 @@
 require("dotenv").config();
 const { validatePlay } = require("./validatePlay");
+const { buildNotationLegend, buildFewShotBlock } = require("./phrasings");
 const express = require("express");
 const cors = require("cors");
 
@@ -12,7 +13,15 @@ const {
   AI_BASE_URL = "https://api.openai.com/v1",
   AI_MODEL = "gpt-4o-mini",
   PORT = 3001,
+  // how many worked examples to show the model. more examples parse shorthand
+  // more reliably but cost prompt tokens and latency - set 0 to turn them off
+  FEWSHOT_EXAMPLES = 8,
 } = process.env;
+
+// the notation legend and examples never change between requests, so build the
+// strings once at startup rather than on every play
+const NOTATION_LEGEND = buildNotationLegend();
+const FEWSHOT_BLOCK = buildFewShotBlock(Number(FEWSHOT_EXAMPLES) || 0);
 
 if (!OPENAI_API_KEY) {
   console.error("ERROR: OPENAI_API_KEY is not set. Copy .env.example to .env and add your key.");
@@ -36,6 +45,8 @@ CURRENT STATE: ${gameState ? `Inning ${gameState.half} ${gameState.inning}, ${ga
 
 RULES: Account for force plays. All runners must be included in movement array.
 
+${NOTATION_LEGEND}
+
 Return ONLY valid JSON (no markdown, no backticks):
 {
   "inning": number,
@@ -56,7 +67,10 @@ Return ONLY valid JSON (no markdown, no backticks):
   "pitch_location": "inside"|"outside"|"high"|"low"|"middle",
   "count": string,
   "confidence": "high"|"medium"|"low"
-}`;
+}${FEWSHOT_BLOCK ? `
+
+EXAMPLES (transcript -> expected JSON):
+${FEWSHOT_BLOCK}` : ""}`;
     const startFetch = Date.now(); // timing 
 
     const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
