@@ -52,8 +52,6 @@ const ACTION_ALIASES: Record<string, string> = {
   "groundout": "ground out",
   "ground ball out": "ground out",
   "grounder": "ground out",
-  "grounded into double play": "ground out",
-  "gidp": "ground out",
   "flyout": "fly out",
   "fly ball out": "fly out",
   "lineout": "fly out",
@@ -100,8 +98,9 @@ const AIRBORNE = new Set(["fly ball", "line drive", "pop up"]);
 export function normalizeAction(raw: string, hitType?: string | null): string {
   const key = actionKey(raw);
   // a double or triple play is an out on the batter; which kind depends on how
-  // the ball was hit
-  if (/^(double|triple) play$|^dp$|^tp$/.test(key)) {
+  // the ball was hit. matched anywhere in the phrase, since the model words it
+  // as "ground into double play", "lined into a triple play" and so on
+  if (/\b(double|triple) play\b|^(dp|tp|gidp)$/.test(key)) {
     return hitType && AIRBORNE.has(hitType.toLowerCase()) ? "fly out" : "ground out";
   }
   return ACTION_ALIASES[key] ?? key;

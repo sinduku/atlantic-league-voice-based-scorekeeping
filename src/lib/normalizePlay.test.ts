@@ -176,6 +176,11 @@ describe("individual normalizers", () => {
     ["HBP", null, "hit by pitch"],
     ["triple play", "line drive", "fly out"],
     ["double play", "ground ball", "ground out"],
+    // seen from the live edge function
+    ["ground into double play", "ground ball", "ground out"],
+    ["Grounded into a double play", null, "ground out"],
+    ["lined into a triple play", "line drive", "fly out"],
+    ["GIDP", null, "ground out"],
     ["something new", null, "something new"],
   ])("action %s (%s) -> %s", (raw, hitType, expected) => {
     expect(normalizeAction(raw, hitType)).toBe(expected);
