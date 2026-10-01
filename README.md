@@ -2,6 +2,24 @@
 
 A real-time baseball scorekeeping app with voice-powered play logging. Built for the Atlantic League.
 
+**Live:** https://sinduku.github.io/atlantic-league-voice-based-scorekeeping/ — open it in
+Chrome or Edge, since speech recognition depends on the browser.
+
+## Deployment
+
+Every push to `main` runs `.github/workflows/deploy.yml`, which installs, runs both test
+suites, builds, and publishes to GitHub Pages. A failing test stops the deploy.
+
+GitHub Pages only serves static files and cannot keep the AI key secret, so the live site
+does not use the Express server. It parses plays through the `parse-play` Supabase edge
+function instead, which holds the key on Supabase's side. That function runs an older
+prompt than `server/`, so its replies are cleaned up in the browser by
+`src/lib/normalizePlay.ts` before anything is shown: actions like "double play" are mapped
+to ones the scoreboard understands, bases and fielders are reduced to plain values, and
+the spray chart zone is worked out from where the ball went.
+
+The Express server is still what `npm run dev` talks to locally.
+
 ## Tech Stack
 
 - **Frontend:** React, TypeScript, Vite, Tailwind CSS, shadcn/ui
@@ -158,3 +176,5 @@ are cross-checked against the runner movements.
 | `PORT` | `server/.env` | Backend port (default: 3001) |
 | `FEWSHOT_EXAMPLES` | `server/.env` | Worked examples added to the prompt (default: 8, `0` disables) |
 | `VITE_API_URL` | Frontend `.env` | Backend URL (default: `http://localhost:3001`) |
+| `VITE_PARSE_URL` | Build env | Full parse endpoint, overrides `VITE_API_URL` (the deploy sets it to the edge function) |
+| `BASE_PATH` | Build env | Path the site is served from (the deploy sets `/<repo-name>/`) |

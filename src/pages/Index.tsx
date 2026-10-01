@@ -5,7 +5,15 @@ import { SprayChart } from "@/components/SprayChart";
 import { Scoreboard } from "@/components/Scoreboard";
 import { toast } from "sonner";
 import { createGame, savePlay, type SaveResult } from "@/lib/persistence";
+import { normalizePlay } from "@/lib/normalizePlay";
 import { type Play, type GameState, INITIAL_GAME_STATE, applyPlayToState } from "@/types/game";
+
+// VITE_PARSE_URL points straight at a deployed endpoint - the GitHub Pages
+// build uses the Supabase edge function, since a static site cannot hold the
+// AI key. Without it, local dev talks to the Express server in server/.
+const PARSE_PLAY_URL =
+  import.meta.env.VITE_PARSE_URL ||
+  `${import.meta.env.VITE_API_URL || "http://localhost:3001"}/api/parse-play`;
 
 const Index = () => {
   const [isProcessing, setIsProcessing] = useState(false);
@@ -39,8 +47,7 @@ const Index = () => {
     setCurrentPlay(null);
 
     try {
-      const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3001";
-      const response = await fetch(`${apiUrl}/api/parse-play`, {
+      const response = await fetch(PARSE_PLAY_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ transcript, gameState }),
@@ -52,8 +59,9 @@ const Index = () => {
       }
 
       const data = await response.json();
-      if (data?.play) {
-        setCurrentPlay(data.play);
+      const parsed = normalizePlay(data?.play);
+      if (parsed.ok) {
+        setCurrentPlay(parsed.play);
       } else {
         toast.error("Couldn't parse that into a play. Try again.");
       }
