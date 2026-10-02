@@ -123,7 +123,7 @@ const Index = () => {
     <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="border-b bg-primary text-primary-foreground">
-        <div className="max-w-2xl mx-auto px-4 py-4 flex items-center gap-3">
+        <div className="max-w-7xl mx-auto px-4 py-4 lg:px-8 flex items-center gap-3">
           <div className="w-8 h-8 rounded-full bg-accent flex items-center justify-center text-accent-foreground font-bold text-sm">
             ⚾
           </div>
@@ -140,7 +140,7 @@ const Index = () => {
         </div>
       </header>
 
-      <main className="max-w-2xl mx-auto px-4 py-8 space-y-8">
+      <main className="max-w-7xl mx-auto px-4 py-6 lg:px-8 space-y-6">
         {/* Scoreboard */}
         <Scoreboard state={gameState} />
 
@@ -157,60 +157,72 @@ const Index = () => {
           </div>
         )}
 
-        {/* Voice recorder */}
-        <VoiceRecorder onTranscriptReady={handleTranscript} isProcessing={isProcessing} />
-
-        {/* Transcript shown while processing */}
-        {isProcessing && lastTranscript && (
-          <div className="bg-muted rounded-lg p-4 text-sm animate-pulse">
-            <span className="text-xs uppercase tracking-wider text-muted-foreground block mb-1">
-              Processing
-            </span>
-            <p>"{lastTranscript}"</p>
-          </div>
-        )}
-
-        {/* Current play for review */}
-        {currentPlay && (
-          <div>
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-              Review This Play
-            </h2>
-            <PlayCard play={currentPlay} onConfirm={handleConfirm} onReject={handleReject} />
-          </div>
-        )}
-
-        {/* Spray Chart */}
-        <SprayChart plays={confirmedPlays} />
-
-        {/* Confirmed plays log */}
-        {confirmedPlays.length > 0 && (
-          <div>
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-              Confirmed Plays ({confirmedPlays.length})
-            </h2>
-            <div className="space-y-3">
-              {confirmedPlays.map((play, i) => (
-                <div key={i} className="bg-muted rounded-lg p-3 text-sm flex items-center gap-3">
-                  <span className="text-xs bg-primary text-primary-foreground rounded px-2 py-0.5 uppercase font-bold">
-                    {play.action}
-                  </span>
-                  <span className="text-foreground flex-1">
-                    {play.description}
-                    {play.hit_type && play.hit_location && (
-                      <span className="text-muted-foreground text-xs ml-2">
-                        — {play.hit_type} to {play.hit_location}
-                      </span>
-                    )}
-                  </span>
-                  {play.rbi > 0 && (
-                    <span className="text-xs text-accent font-bold">{play.rbi} RBI</span>
-                  )}
-                </div>
-              ))}
+        {/* two columns on wide screens: scoring on the left, the game so far on
+            the right. phones stack them in the same order */}
+        <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
+          <section className="space-y-6" aria-label="Score a play">
+            {/* Voice recorder */}
+            <div className="bg-card border rounded-xl p-6">
+              <VoiceRecorder onTranscriptReady={handleTranscript} isProcessing={isProcessing} />
             </div>
-          </div>
-        )}
+
+            {/* Transcript shown while processing */}
+            {isProcessing && lastTranscript && (
+              <div className="bg-muted rounded-lg p-4 text-sm animate-pulse">
+                <span className="text-xs uppercase tracking-wider text-muted-foreground block mb-1">
+                  Processing
+                </span>
+                <p>"{lastTranscript}"</p>
+              </div>
+            )}
+
+            {/* Current play for review */}
+            {currentPlay && (
+              <div>
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+                  Review This Play
+                </h2>
+                <PlayCard play={currentPlay} onConfirm={handleConfirm} onReject={handleReject} />
+              </div>
+            )}
+          </section>
+
+          <section className="space-y-6" aria-label="Game so far">
+            {/* Confirmed plays log */}
+            <div className="bg-card border rounded-xl p-6">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+                Confirmed Plays ({confirmedPlays.length})
+              </h2>
+              {confirmedPlays.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No plays yet.</p>
+              ) : (
+                <div className="space-y-2 lg:max-h-[28rem] lg:overflow-y-auto lg:pr-1">
+                  {confirmedPlays.map((play, i) => (
+                    <div key={i} className="bg-muted rounded-lg p-3 text-sm flex items-center gap-3">
+                      <span className="shrink-0 text-xs bg-primary text-primary-foreground rounded px-2 py-0.5 uppercase font-bold">
+                        {play.action}
+                      </span>
+                      <span className="text-foreground flex-1 min-w-0">
+                        {play.description}
+                        {play.hit_type && play.hit_location && (
+                          <span className="text-muted-foreground text-xs ml-2">
+                            — {play.hit_type} to {play.hit_location}
+                          </span>
+                        )}
+                      </span>
+                      {play.rbi > 0 && (
+                        <span className="shrink-0 text-xs text-accent font-bold">{play.rbi} RBI</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Spray Chart */}
+            <SprayChart plays={confirmedPlays} />
+          </section>
+        </div>
       </main>
     </div>
   );
