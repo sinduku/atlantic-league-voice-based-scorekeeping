@@ -86,10 +86,9 @@ ${FEWSHOT_BLOCK}` : ""}`;
           { role: "user", content: transcript },
         ],
         // added parameters to reduce token usage + response time
-        num_predict: 300,
+        max_tokens: 300,
         temperature: 0.1,
         top_p: 0.9,
-        top_k: 40,
       }),
     });
 
