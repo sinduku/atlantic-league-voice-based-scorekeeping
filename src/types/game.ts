@@ -47,12 +47,12 @@ export function applyPlayToState(state: GameState, play: Play): GameState {
     runners: { ...state.runners },
   };
 
-  // Apply RBIs to score
-  if (play.rbi > 0) {
+  const runs = runsScored(play, state);
+  if (runs > 0) {
     if (state.half === "top") {
-      next.score.away += play.rbi;
+      next.score.away += runs;
     } else {
-      next.score.home += play.rbi;
+      next.score.home += runs;
     }
   }
 
@@ -100,6 +100,20 @@ export function applyPlayToState(state: GameState, play: Play): GameState {
   }
 
   return next;
+}
+
+// Every runner who crosses the plate counts, not just the ones credited as
+// RBIs - a run on a wild pitch, passed ball or error is still a run. The rbi
+// count is a floor in case the parser credited runs without listing the
+// runners, and a home run always scores the batter plus everyone on base.
+export function runsScored(play: Play, state: GameState): number {
+  const crossed = play.runners.filter((r) => r.to.toLowerCase() === "home").length;
+  let runs = Math.max(crossed, play.rbi || 0);
+  if (play.action.toLowerCase() === "home run") {
+    const onBase = [state.runners.first, state.runners.second, state.runners.third].filter(Boolean).length;
+    runs = Math.max(runs, onBase + 1);
+  }
+  return runs;
 }
 
 function baseToKey(base: string): "first" | "second" | "third" | null {

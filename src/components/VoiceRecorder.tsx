@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { Mic, Square, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 
 interface VoiceRecorderProps {
@@ -7,13 +9,32 @@ interface VoiceRecorderProps {
   isProcessing: boolean;
 }
 
-export function VoiceRecorder({ onTranscriptReady, isProcessing }: VoiceRecorderProps) {
-  const { isRecording, transcript, startRecording, stopRecording, error } = useVoiceRecorder();
+// how long a pause ends a play when auto-send is on. long enough for a breath
+// mid-sentence, short enough not to feel like waiting
+const AUTO_SEND_SILENCE_MS = 1000;
+const AUTO_SEND_KEY = "voice-scorekeeper:auto-send";
 
-  const handleStop = () => {
-    stopRecording();
-    if (transcript.trim()) {
-      onTranscriptReady(transcript.trim());
+function readAutoSend(): boolean {
+  try {
+    return localStorage.getItem(AUTO_SEND_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+export function VoiceRecorder({ onTranscriptReady, isProcessing }: VoiceRecorderProps) {
+  const [autoSend, setAutoSend] = useState(readAutoSend);
+  const { isRecording, transcript, startRecording, finish, error } = useVoiceRecorder({
+    onFinished: onTranscriptReady,
+    silenceMs: autoSend ? AUTO_SEND_SILENCE_MS : 0,
+  });
+
+  const toggleAutoSend = (on: boolean) => {
+    setAutoSend(on);
+    try {
+      localStorage.setItem(AUTO_SEND_KEY, on ? "on" : "off");
+    } catch {
+      // private windows can refuse storage; the switch still works this visit
     }
   };
 
@@ -26,7 +47,7 @@ export function VoiceRecorder({ onTranscriptReady, isProcessing }: VoiceRecorder
         )}
         <Button
           size="lg"
-          onClick={isRecording ? handleStop : startRecording}
+          onClick={isRecording ? finish : startRecording}
           disabled={isProcessing}
           className={`w-24 h-24 rounded-full transition-all duration-300 ${
             isRecording
@@ -48,9 +69,16 @@ export function VoiceRecorder({ onTranscriptReady, isProcessing }: VoiceRecorder
         {isProcessing
           ? "Parsing play..."
           : isRecording
-          ? "Listening... tap to stop"
+          ? autoSend
+            ? "Listening... sends when you pause"
+            : "Listening... tap to stop"
           : "Tap to record a play"}
       </p>
+
+      <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+        <Switch checked={autoSend} onCheckedChange={toggleAutoSend} disabled={isRecording} />
+        Send automatically when I stop talking
+      </label>
 
       {/* Live transcript */}
       {transcript && (

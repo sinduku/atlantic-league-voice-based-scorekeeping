@@ -19,8 +19,8 @@ const POSITIONS = {
   9: "right fielder",
 };
 
-// Spray chart zones. These MUST stay in step with ZONE_COORDS in
-// src/components/SprayChart.tsx - that component is what actually plots the
+// Spray chart zones. These MUST stay in step with ZONE_DIRECTIONS in
+// src/lib/sprayGeometry.ts - that is what actually places the
 // dot, so its numbering is the source of truth. These are NOT the same numbers
 // as POSITIONS above.
 const FIELD_ZONES = {
@@ -57,7 +57,94 @@ const ACTIONS = [
   "sacrifice fly",
 ];
 
+// The first FEWSHOT_EXAMPLES of these go into the prompt, so the ones that
+// teach the model the most (names, runners moving, rbis) come first. Bare
+// shorthand like "F8" is mostly scored in the browser and never reaches it.
 const EXAMPLES = [
+  {
+    transcript: "Soto doubles down the right field line, Lindor scores from first",
+    play: {
+      action: "double",
+      description: "Soto doubles down the right field line, Lindor scores",
+      batter: "Soto",
+      runners: [
+        { from: "1st", to: "home", runner: "Lindor" },
+        { from: "home", to: "2nd", runner: "Soto" },
+      ],
+      rbi: 1,
+      outs_recorded: 0,
+      fielders_involved: ["9"],
+      hit_location: "right field line",
+      hit_type: "line drive",
+      hit_hardness: "hard",
+      field_zone: 5,
+      confidence: "high",
+    },
+  },
+  {
+    transcript: "sac fly to right, runner tags from third",
+    play: {
+      action: "sacrifice fly",
+      description: "Fly ball to right field, runner tags from third and scores",
+      runners: [
+        { from: "3rd", to: "home", runner: null },
+        { from: "home", to: "out", runner: null },
+      ],
+      rbi: 1,
+      outs_recorded: 1,
+      fielders_involved: ["9"],
+      hit_location: "right field",
+      hit_type: "fly ball",
+      hit_hardness: "medium",
+      field_zone: 5,
+      confidence: "high",
+    },
+  },
+  {
+    transcript: "Ohtani steals second",
+    play: {
+      action: "stolen base",
+      description: "Ohtani steals second",
+      runners: [{ from: "1st", to: "2nd", runner: "Ohtani" }],
+      rbi: 0,
+      outs_recorded: 0,
+      fielders_involved: ["2", "6"],
+      confidence: "high",
+    },
+  },
+  {
+    transcript: "Judge got rung up on a slider",
+    play: {
+      action: "strikeout",
+      description: "Judge caught looking on a slider",
+      batter: "Judge",
+      runners: [{ from: "home", to: "out", runner: "Judge" }],
+      rbi: 0,
+      outs_recorded: 1,
+      fielders_involved: ["1", "2"],
+      pitch_type: "slider",
+      confidence: "high",
+    },
+  },
+  {
+    transcript: "fielder's choice, runner out at second",
+    play: {
+      action: "fielder's choice",
+      description: "Ground ball to short, lead runner forced at second, batter safe at first",
+      runners: [
+        { from: "1st", to: "out", runner: null },
+        { from: "home", to: "1st", runner: null },
+      ],
+      rbi: 0,
+      outs_recorded: 1,
+      fielders_involved: ["6", "4"],
+      hit_location: "shortstop",
+      hit_type: "ground ball",
+      hit_hardness: "medium",
+      field_zone: 6,
+      confidence: "high",
+    },
+  },
   {
     transcript: "six four three double play",
     play: {
@@ -74,6 +161,47 @@ const EXAMPLES = [
       hit_type: "ground ball",
       hit_hardness: "medium",
       field_zone: 6,
+      confidence: "high",
+    },
+  },
+  {
+    transcript: "Rodriguez lines a single to right center, Chen scores from second",
+    play: {
+      action: "single",
+      description: "Rodriguez lines a single into right-center, Chen scores from second",
+      batter: "Rodriguez",
+      runners: [
+        { from: "2nd", to: "home", runner: "Chen" },
+        { from: "home", to: "1st", runner: "Rodriguez" },
+      ],
+      rbi: 1,
+      outs_recorded: 0,
+      fielders_involved: ["8", "9"],
+      hit_location: "right-center gap",
+      hit_type: "line drive",
+      hit_hardness: "hard",
+      field_zone: 4,
+      confidence: "high",
+    },
+  },
+  {
+    transcript: "grand slam to dead center",
+    play: {
+      action: "home run",
+      description: "Grand slam to center field",
+      runners: [
+        { from: "3rd", to: "home", runner: null },
+        { from: "2nd", to: "home", runner: null },
+        { from: "1st", to: "home", runner: null },
+        { from: "home", to: "home", runner: null },
+      ],
+      rbi: 4,
+      outs_recorded: 0,
+      fielders_involved: [],
+      hit_location: "center field",
+      hit_type: "fly ball",
+      hit_hardness: "hard",
+      field_zone: 3,
       confidence: "high",
     },
   },
@@ -186,45 +314,6 @@ const EXAMPLES = [
     },
   },
   {
-    transcript: "Rodriguez lines a single to right center, Chen scores from second",
-    play: {
-      action: "single",
-      description: "Rodriguez lines a single into right-center, Chen scores from second",
-      batter: "Rodriguez",
-      runners: [
-        { from: "2nd", to: "home", runner: "Chen" },
-        { from: "home", to: "1st", runner: "Rodriguez" },
-      ],
-      rbi: 1,
-      outs_recorded: 0,
-      fielders_involved: ["8", "9"],
-      hit_location: "right-center gap",
-      hit_type: "line drive",
-      hit_hardness: "hard",
-      field_zone: 4,
-      confidence: "high",
-    },
-  },
-  {
-    transcript: "sac fly to right, runner tags from third",
-    play: {
-      action: "sacrifice fly",
-      description: "Fly ball to right field, runner tags from third and scores",
-      runners: [
-        { from: "3rd", to: "home", runner: null },
-        { from: "home", to: "out", runner: null },
-      ],
-      rbi: 1,
-      outs_recorded: 1,
-      fielders_involved: ["9"],
-      hit_location: "right field",
-      hit_type: "fly ball",
-      hit_hardness: "medium",
-      field_zone: 5,
-      confidence: "high",
-    },
-  },
-  {
     transcript: "solo shot to left",
     play: {
       action: "home run",
@@ -252,25 +341,6 @@ const EXAMPLES = [
       hit_location: "third base line",
       hit_type: "bunt",
       hit_hardness: "soft",
-      field_zone: 6,
-      confidence: "high",
-    },
-  },
-  {
-    transcript: "fielder's choice, runner out at second",
-    play: {
-      action: "fielder's choice",
-      description: "Ground ball to short, lead runner forced at second, batter safe at first",
-      runners: [
-        { from: "1st", to: "out", runner: null },
-        { from: "home", to: "1st", runner: null },
-      ],
-      rbi: 0,
-      outs_recorded: 1,
-      fielders_involved: ["6", "4"],
-      hit_location: "shortstop",
-      hit_type: "ground ball",
-      hit_hardness: "medium",
       field_zone: 6,
       confidence: "high",
     },
@@ -383,27 +453,39 @@ function compact(value) {
   return value;
 }
 
+// Scorekeeping abbreviations and broadcast slang a scorekeeper might say.
+// Each line is "words -> meaning" and goes into the prompt as written.
+const SLANG = [
+  "walk: BB, ball four, free pass. hit by pitch: HBP, plunked, drilled. strikeout: K, punched out; looking: backwards K, rung up",
+  "home run: HR, homer, dinger, jack, bomb, goes yard; solo shot = nobody on; grand slam = bases loaded, 4 rbi",
+  "SF = sacrifice fly. sac bunt = ground out, hit_type bunt. FC, SB, WP, PB, BK = fielder's choice, stolen base, wild pitch, passed ball, balk. 1B/2B/3B as a play = single/double/triple",
+  "double play (DP, turned two, twin killing) = 2 outs, action ground out, or fly out if caught in the air",
+  "line drive: liner, frozen rope, laser. fly ball: can of corn, blooper, Texas Leaguer. ground ball: chopper, dribbler, nubber, roller, worm burner",
+];
+
 function buildNotationLegend() {
   const positions = Object.entries(POSITIONS)
     .map(([n, name]) => `${n}=${name}`)
     .join(", ");
-  const zones = Object.entries(FIELD_ZONES)
-    .map(([n, name]) => `${n}=${name}`)
-    .join(", ");
   return [
-    `POSITION NUMBERS (for fielders_involved): ${positions}`,
-    `A hyphenated sequence is throw order: "6-4-3" is shortstop to second baseman to first baseman.`,
-    `"E" plus a number is an error by that fielder ("E5" = error by the third baseman).`,
-    `"F"/"L"/"P"/"G" plus a number is a fly out / line out / pop out / ground out to that fielder.`,
-    `"U" plus a number is an unassisted putout. "K" is a strikeout, "K looking" is called strike three.`,
-    `FIELD_ZONE (spray chart location, NOT position numbers): ${zones}`,
+    `Positions (fielders_involved): ${positions}`,
+    `"6-4-3" = throw order. E5 = error by 5. F8/L7/P4/G6 = fly/line/pop/ground out to that fielder. U3 = unassisted.`,
+    ...SLANG,
   ].join("\n");
 }
+
+// keys an example can leave out without the model learning anything less:
+// field_zone is worked out in the browser from hit_location, and confidence is
+// "high" in every example
+const PROMPT_OMITS = ["field_zone", "confidence", "hit_hardness"];
 
 // renders examples as compact one-line pairs for the system prompt
 function buildFewShotBlock(limit = EXAMPLES.length) {
   return EXAMPLES.slice(0, limit)
-    .map((ex) => `"${ex.transcript}" -> ${JSON.stringify(compact(ex.play))}`)
+    .map((ex) => {
+      const play = Object.fromEntries(Object.entries(ex.play).filter(([k]) => !PROMPT_OMITS.includes(k)));
+      return `"${ex.transcript}" -> ${JSON.stringify(compact(play))}`;
+    })
     .join("\n");
 }
 
@@ -413,6 +495,7 @@ module.exports = {
   ACTIONS,
   NO_RBI_ACTIONS,
   EXAMPLES,
+  SLANG,
   compact,
   buildNotationLegend,
   buildFewShotBlock,

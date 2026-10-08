@@ -91,11 +91,11 @@ test("outs_recorded matches the number of runners retired", () => {
 });
 
 // guards against the spray chart being renumbered without updating this library
-test("FIELD_ZONES matches ZONE_COORDS in SprayChart.tsx", () => {
-  const chartPath = path.join(__dirname, "..", "src", "components", "SprayChart.tsx");
+test("FIELD_ZONES matches ZONE_DIRECTIONS in sprayGeometry.ts", () => {
+  const chartPath = path.join(__dirname, "..", "src", "lib", "sprayGeometry.ts");
   const source = fs.readFileSync(chartPath, "utf8");
-  const block = source.match(/ZONE_COORDS[^=]*=\s*\{([\s\S]*?)\n\};/);
-  assert.ok(block, "could not find ZONE_COORDS in SprayChart.tsx");
+  const block = source.match(/ZONE_DIRECTIONS[^=]*=\s*\{([\s\S]*?)\n\};/);
+  assert.ok(block, "could not find ZONE_DIRECTIONS in sprayGeometry.ts");
   const chartZones = [...block[1].matchAll(/^\s*(\d+):/gm)].map((m) => Number(m[1])).sort();
   const libraryZones = Object.keys(FIELD_ZONES).map(Number).sort();
   assert.deepEqual(libraryZones, chartZones, "zone numbers have drifted apart");
@@ -111,12 +111,14 @@ test("few-shot block renders one parseable pair per line", () => {
     const parsed = JSON.parse(json);
     assert.ok(parsed.action && parsed.description);
     assert.equal(json.includes("null"), false, "nulls should be stripped from the prompt");
+    // the browser derives the zone, so the model is never shown the numbering
+    assert.equal("field_zone" in parsed, false, "field_zone should not reach the prompt");
   }
 });
 
 test("notation legend mentions the shorthand it claims to teach", () => {
   const legend = buildNotationLegend();
-  for (const token of ["6-4-3", "E5", "shortstop", "FIELD_ZONE"]) {
+  for (const token of ["6-4-3", "E5", "shortstop", "double play", "backwards K", "grand slam"]) {
     assert.ok(legend.includes(token), `legend is missing ${token}`);
   }
 });

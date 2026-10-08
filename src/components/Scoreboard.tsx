@@ -2,9 +2,10 @@ import type { GameState } from "@/types/game";
 
 interface ScoreboardProps {
   state: GameState;
+  teamNames?: { away: string; home: string };
 }
 
-export function Scoreboard({ state }: ScoreboardProps) {
+export function Scoreboard({ state, teamNames = { away: "Away", home: "Home" } }: ScoreboardProps) {
   const bases = [
     { key: "second" as const, cx: 40, cy: 12 },
     { key: "third" as const, cx: 18, cy: 34 },
@@ -62,8 +63,11 @@ export function Scoreboard({ state }: ScoreboardProps) {
         {/* Score */}
         <div className="text-center">
           <span className="text-xs uppercase tracking-wider text-muted-foreground block">Score</span>
-          <span className="text-2xl font-bold text-foreground">
+          <span className="text-2xl font-bold text-foreground tabular-nums">
             {state.score.away} – {state.score.home}
+          </span>
+          <span className="block text-xs text-muted-foreground max-w-[12rem] truncate">
+            {teamNames.away} – {teamNames.home}
           </span>
         </div>
 

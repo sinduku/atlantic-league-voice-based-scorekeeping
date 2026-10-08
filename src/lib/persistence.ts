@@ -54,3 +54,14 @@ export async function savePlay(
     return failure(e);
   }
 }
+
+// removes a play that was undone, so the saved log matches the screen
+export async function deletePlay(gameId: string, playIndex: number): Promise<SaveResult<null>> {
+  try {
+    const { error } = await supabase.from("plays").delete().eq("game_id", gameId).eq("play_index", playIndex);
+    if (error) return failure(error.message);
+    return { ok: true, data: null };
+  } catch (e) {
+    return failure(e);
+  }
+}

@@ -144,7 +144,7 @@ export function normalizeFielder(raw: unknown): string | null {
   return null;
 }
 
-// Zone numbers follow ZONE_COORDS in SprayChart.tsx. Infield words are checked
+// Zone numbers follow ZONE_DIRECTIONS in sprayGeometry.ts. Infield words are checked
 // before outfield ones so "third base line" lands in the infield, not left field.
 const ZONE_BY_FIELDER: Record<string, number> = {
   "1": 9,
