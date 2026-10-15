@@ -2,6 +2,7 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import type { GameState } from "@/types/game";
 import { battingLines, battingTeam, lineScore, teamOf, type LoggedPlay, type Team } from "@/lib/boxScore";
+import { inningsPitched, pitchingLines } from "@/lib/pitching";
 import { average, describeRunners, fileBaseName, type GameInfo } from "@/lib/exportCsv";
 import { BASES, FIELD, LEGEND, isBallInPlay, isHit, markerColor, sprayPoint, toXY } from "@/lib/sprayGeometry";
 
@@ -184,6 +185,30 @@ export function exportPdf(log: LoggedPlay[], state: GameState, info: GameInfo) {
     });
     y = (doc.lastAutoTable?.finalY ?? y) + 14;
   }
+
+  // pitching
+  const pitching = pitchingLines(log, info.pitchCounts);
+  for (const team of ["away", "home"] as Team[]) {
+    const rows = pitching.filter((p) => p.team === team);
+    autoTable(doc, {
+      startY: y,
+      head: [[`${info.teamNames[team]} pitching`, "IP", "BF", "H", "R", "BB", "HBP", "K", "HR", "Pitches"]],
+      body: rows.length
+        ? rows.map((p) => [p.name, inningsPitched(p.outs), p.bf, p.h, p.r, p.bb, p.hbp, p.k, p.hr, p.pitches ?? ""])
+        : [["No pitching recorded yet", "", "", "", "", "", "", "", "", ""]],
+      theme: "striped",
+      styles: { fontSize: 9, halign: "center", cellPadding: 3 },
+      headStyles: { fillColor: NAVY },
+      columnStyles: { 0: { halign: "left", cellWidth: 150 } },
+      margin: { left: MARGIN, right: MARGIN },
+    });
+    y = (doc.lastAutoTable?.finalY ?? y) + 14;
+  }
+  // earned runs depend on the official scorer's call on errors, which the app
+  // doesn't make, so say what R means rather than let it pass for ER
+  doc.setFont("helvetica", "italic").setFontSize(8).setTextColor(110);
+  doc.text("R is all runs allowed, charged to the pitcher who put each runner on base. Pitches are tap-counted.", MARGIN, y);
+  y += 10;
 
   // play-by-play
   autoTable(doc, {

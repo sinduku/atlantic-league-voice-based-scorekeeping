@@ -149,6 +149,11 @@ in `src/data/extra-players.txt`.
 - 📊 Live scoreboard and line score (runs by inning, R / H / E) with your team names
 - 🎯 Spray chart placed by direction and how the ball was hit; filled dots are hits,
   hollow are outs, and it filters by team
+- 📋 Lineups for both teams: the batter due up and the pitcher are filled in on every play,
+  shorthand included, and a batter out of turn or missing from the lineup is flagged.
+  Pinch hitters and pitching changes keep each slot's history
+- ⚾ Pitching lines (IP, BF, H, R, BB, K, HR) with a tap-to-count pitch counter. A run is
+  charged to the pitcher who put that runner on base, even after a pitching change
 - ↩️ Undo the last confirmed play
 - 💾 The game in progress survives a page refresh (Reset starts a new one)
 - 📄 Export a PDF game report: line score, spray charts for both teams, batting lines

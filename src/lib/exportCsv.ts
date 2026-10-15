@@ -1,10 +1,13 @@
 import { battingLines, battingTeam, type LoggedPlay, type Team } from "@/lib/boxScore";
+import { inningsPitched, pitchingLines } from "@/lib/pitching";
 
-// Game exports as spreadsheets: one row per play, and one row per batter.
+// Game exports as spreadsheets: one row per play, one per batter, one per pitcher.
 
 export interface GameInfo {
   teamNames: Record<Team, string>;
   date: Date;
+  // tap-counted pitches, keyed by pitcherKey
+  pitchCounts?: Record<string, number>;
 }
 
 function cell(value: unknown): string {
@@ -66,6 +69,14 @@ export function battingCsv(log: LoggedPlay[], info: GameInfo): string {
   const header = ["Team", "Batter", "PA", "AB", "R", "H", "2B", "3B", "HR", "RBI", "BB", "K", "AVG"];
   const rows = battingLines(log).map((b) => [
     info.teamNames[b.team], b.name, b.pa, b.ab, b.r, b.h, b.doubles, b.triples, b.hr, b.rbi, b.bb, b.k, average(b.h, b.ab),
+  ]);
+  return toCsv([header, ...rows]);
+}
+
+export function pitchingCsv(log: LoggedPlay[], info: GameInfo): string {
+  const header = ["Team", "Pitcher", "IP", "BF", "H", "R", "BB", "HBP", "K", "HR", "Pitches"];
+  const rows = pitchingLines(log, info.pitchCounts).map((p) => [
+    info.teamNames[p.team], p.name, inningsPitched(p.outs), p.bf, p.h, p.r, p.bb, p.hbp, p.k, p.hr, p.pitches,
   ]);
   return toCsv([header, ...rows]);
 }

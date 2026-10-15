@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Download, FileSpreadsheet, FileText, Keyboard, RotateCcw, Trash2, Undo2 } from "lucide-react";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
 import { PlayCard } from "@/components/PlayCard";
 import { SprayChart } from "@/components/SprayChart";
 import { Scoreboard } from "@/components/Scoreboard";
 import { LineScore } from "@/components/LineScore";
+import { LineupPanel } from "@/components/LineupPanel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -30,11 +31,24 @@ import { toast } from "sonner";
 import { createGame, deletePlay, savePlay, type SaveResult } from "@/lib/persistence";
 import { normalizePlay } from "@/lib/normalizePlay";
 import { parseShorthand } from "@/lib/shorthand";
-import { correctNames, loadNameIndex, type NameIndex } from "@/lib/correctNames";
+import { buildNameIndex, correctNames, loadPlayerNames } from "@/lib/correctNames";
 import { checkPlay } from "@/lib/checkPlay";
 import { buildParseContext } from "@/lib/parseContext";
-import { inningLabel, type LoggedPlay, type Team } from "@/lib/boxScore";
-import { battingCsv, downloadCsv, fileBaseName, playByPlayCsv, type GameInfo } from "@/lib/exportCsv";
+import { battingTeam, inningLabel, type LoggedPlay, type Team } from "@/lib/boxScore";
+import {
+  EMPTY_LINEUPS,
+  applyLineup,
+  currentBatter,
+  currentPitcher,
+  dueUpSlot,
+  hasBattingOrder,
+  lineupNames,
+  otherTeam,
+  type Lineups,
+  type TeamLineup,
+} from "@/lib/lineup";
+import { pitcherKey, pitchingLines } from "@/lib/pitching";
+import { battingCsv, downloadCsv, fileBaseName, pitchingCsv, playByPlayCsv, type GameInfo } from "@/lib/exportCsv";
 import { type Play, type GameState, INITIAL_GAME_STATE, applyPlayToState } from "@/types/game";
 
 // VITE_PARSE_URL points straight at a deployed endpoint - the GitHub Pages
@@ -59,12 +73,18 @@ interface ParseInfo {
 // mid-game doesn't lose it. Reset clears it.
 const STORAGE_KEY = "voice-scorekeeper:game";
 
+const NOBODY_MARKED: Record<Team, number | null> = { away: null, home: null };
+
 interface SavedGame {
   log: LoggedPlay[];
   gameState: GameState;
   teamNames: Record<Team, string>;
   gameId: string | null;
   startedAt: string;
+  // missing from games saved before lineups existed
+  lineups?: Lineups;
+  markedUp?: Record<Team, number | null>;
+  pitchCounts?: Record<string, number>;
 }
 
 function loadSavedGame(): SavedGame | null {
@@ -95,19 +115,42 @@ const Index = () => {
   const [warnings, setWarnings] = useState<string[]>([]);
   const [parseInfo, setParseInfo] = useState<ParseInfo | null>(null);
   const [typed, setTyped] = useState("");
+  const [lineups, setLineups] = useState<Lineups>(restored?.lineups ?? EMPTY_LINEUPS);
+  // a batter the scorer marked as up by hand, until that team's next plate appearance
+  const [markedUp, setMarkedUp] = useState<Record<Team, number | null>>(restored?.markedUp ?? NOBODY_MARKED);
+  const [pitchCounts, setPitchCounts] = useState<Record<string, number>>(restored?.pitchCounts ?? {});
+  // the batting-order slot the play under review will be credited to
+  const [pendingSlot, setPendingSlot] = useState<number | null>(null);
 
   const confirmedPlays = log.map((e) => e.play);
 
+  const teamLabel = (team: Team) => teamNames[team].trim() || DEFAULT_TEAMS[team];
+  const shownTeams = { away: teamLabel("away"), home: teamLabel("home") };
+
+  const batting = battingTeam(gameState.half);
+  const fielding = otherTeam(batting);
+  const dueUp: Record<Team, number> = {
+    away: dueUpSlot("away", log, markedUp.away),
+    home: dueUpSlot("home", log, markedUp.home),
+  };
+  const pitching = useMemo(() => pitchingLines(log, pitchCounts), [log, pitchCounts]);
+  const atBat = hasBattingOrder(lineups[batting]) ? currentBatter(lineups[batting], dueUp[batting]) : null;
+  const pitcherNow = currentPitcher(lineups[fielding]);
+
   // the player list loads once, after the page, and is ready long before the
-  // first play is spoken
-  const nameIndex = useRef<NameIndex | null>(null);
+  // first play is spoken. lineup names go first so a player on today's card
+  // wins over a sound-alike elsewhere in the league, and so a player missing
+  // from the league list still gets corrected
+  const [playerNames, setPlayerNames] = useState<string[] | null>(null);
   useEffect(() => {
-    loadNameIndex()
-      .then((index) => {
-        nameIndex.current = index;
-      })
-      .catch((e) => console.warn("Player names did not load; names won't be corrected", e));
+    loadPlayerNames()
+      .then(setPlayerNames)
+      .catch((e) => console.warn("Player names did not load; only lineup names will be corrected", e));
   }, []);
+  const nameIndex = useMemo(() => {
+    const names = [...lineupNames(lineups), ...(playerNames ?? [])];
+    return names.length ? buildNameIndex(names) : null;
+  }, [lineups, playerNames]);
 
   // holds the in-flight (or finished) game insert so rapid confirmations share
   // one game row instead of each creating their own
@@ -122,12 +165,21 @@ const Index = () => {
 
   useEffect(() => {
     try {
-      const saved: SavedGame = { log, gameState, teamNames, gameId: gameId.current, startedAt };
+      const saved: SavedGame = {
+        log,
+        gameState,
+        teamNames,
+        gameId: gameId.current,
+        startedAt,
+        lineups,
+        markedUp,
+        pitchCounts,
+      };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
     } catch {
       // private windows can refuse storage; the game still works, it just won't survive a refresh
     }
-  }, [log, gameState, teamNames, startedAt, savedCount]);
+  }, [log, gameState, teamNames, startedAt, savedCount, lineups, markedUp, pitchCounts]);
 
   const ensureGame = async () => {
     if (!gameRequest.current) {
@@ -145,19 +197,24 @@ const Index = () => {
   };
 
   const showPlay = (play: Play, info: ParseInfo) => {
-    const checked = checkPlay(play, gameState);
+    // the lineup fills the batter and pitcher first, so the base check sees
+    // the real names
+    const lined = applyLineup(play, gameState, lineups, dueUp[batting], shownTeams);
+    const checked = checkPlay(lined.play, gameState);
+    const allWarnings = [...lined.warnings, ...checked.warnings];
     setCurrentPlay(checked.play);
-    setWarnings(checked.warnings);
+    setWarnings(allWarnings);
+    setPendingSlot(lined.slot);
     setParseInfo(info);
     console.info(
       `[parse] ${info.source}${info.model ? ` (${info.model})` : ""} in ${info.ms}ms`,
-      checked.warnings.length ? checked.warnings : ""
+      allWarnings.length ? allWarnings : ""
     );
   };
 
   const handleTranscript = async (rawTranscript: string) => {
     const started = performance.now();
-    const transcript = correctNames(rawTranscript, nameIndex.current);
+    const transcript = correctNames(rawTranscript, nameIndex);
     setLastTranscript(transcript);
     setCurrentPlay(null);
     setWarnings([]);
@@ -175,7 +232,11 @@ const Index = () => {
       const response = await fetch(PARSE_PLAY_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript, gameState, context: buildParseContext(log, gameState, teamNames) }),
+        body: JSON.stringify({
+          transcript,
+          gameState,
+          context: buildParseContext(log, gameState, teamNames, { lineups, dueUp: dueUp[batting] }),
+        }),
         signal: AbortSignal.timeout(PARSE_TIMEOUT_MS),
       });
 
@@ -226,9 +287,13 @@ const Index = () => {
     const playIndex = log.length;
     const before = gameState;
     const after = applyPlayToState(before, play);
+    const slot = pendingSlot;
 
-    setLog((prev) => [...prev, { play, before, after }]);
+    setLog((prev) => [...prev, { play, before, after, slot }]);
     setGameState(after);
+    setPendingSlot(null);
+    // a hand-marked batter only stands until that team's next plate appearance
+    if (slot != null) setMarkedUp((prev) => ({ ...prev, [battingTeam(before.half)]: null }));
     toast.success(after.inning !== before.inning || after.half !== before.half ? `Play confirmed. Side retired, ${inningLabel(after)}.` : "Play confirmed!");
     setCurrentPlay(null);
     setWarnings([]);
@@ -252,6 +317,7 @@ const Index = () => {
   const handleReject = () => {
     setCurrentPlay(null);
     setWarnings([]);
+    setPendingSlot(null);
     toast("Play rejected. Try recording again.");
   };
 
@@ -283,8 +349,26 @@ const Index = () => {
     gameId.current = null;
     setSavedCount(0);
     setSaveError(null);
+    setLineups(EMPTY_LINEUPS);
+    setMarkedUp(NOBODY_MARKED);
+    setPitchCounts({});
+    setPendingSlot(null);
     toast.success("New game started!");
   };
+
+  const handleLineup = (team: Team, lineup: TeamLineup) => setLineups((prev) => ({ ...prev, [team]: lineup }));
+
+  const handleMarkDueUp = (team: Team, slot: number) => {
+    setMarkedUp((prev) => ({ ...prev, [team]: slot }));
+    const name = currentBatter(lineups[team], slot);
+    if (name) toast(`${name} is due up for ${shownTeams[team]}.`);
+  };
+
+  const handlePitch = (team: Team, pitcher: string, delta: number) =>
+    setPitchCounts((prev) => {
+      const key = pitcherKey(team, pitcher);
+      return { ...prev, [key]: Math.max(0, (prev[key] ?? 0) + delta) };
+    });
 
   // Enter confirms the play under review, Escape rejects it
   useEffect(() => {
@@ -313,9 +397,7 @@ const Index = () => {
   };
 
   const setTeam = (team: Team, name: string) => setTeamNames((prev) => ({ ...prev, [team]: name }));
-  const teamLabel = (team: Team) => teamNames[team].trim() || DEFAULT_TEAMS[team];
-  const shownTeams = { away: teamLabel("away"), home: teamLabel("home") };
-  const info = (): GameInfo => ({ teamNames: shownTeams, date: new Date(startedAt) });
+  const info = (): GameInfo => ({ teamNames: shownTeams, date: new Date(startedAt), pitchCounts });
 
   return (
     <div className="min-h-screen bg-background">
@@ -358,6 +440,9 @@ const Index = () => {
               <DropdownMenuItem onSelect={() => downloadCsv(`${fileBaseName(info())}-batting.csv`, battingCsv(log, info()))}>
                 <FileSpreadsheet className="w-4 h-4 mr-2" /> Batting stats (CSV)
               </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => downloadCsv(`${fileBaseName(info())}-pitching.csv`, pitchingCsv(log, info()))}>
+                <FileSpreadsheet className="w-4 h-4 mr-2" /> Pitching stats (CSV)
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
 
@@ -371,8 +456,8 @@ const Index = () => {
               <AlertDialogHeader>
                 <AlertDialogTitle>Start a new game?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This clears the scoreboard and all {log.length} confirmed plays from this screen. Export the game
-                  first if you want to keep it.
+                  This clears the scoreboard, both lineups, the pitch counts and all {log.length} confirmed plays from
+                  this screen. Export the game first if you want to keep it.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -405,7 +490,13 @@ const Index = () => {
         </div>
 
         {/* Scoreboard */}
-        <Scoreboard state={gameState} teamNames={shownTeams} />
+        <Scoreboard
+          state={gameState}
+          teamNames={shownTeams}
+          atBat={atBat}
+          pitcher={pitcherNow}
+          pitches={pitcherNow ? pitchCounts[pitcherKey(fielding, pitcherNow)] ?? 0 : null}
+        />
         <LineScore log={log} state={gameState} teamNames={shownTeams} />
 
         {/* Whether confirmed plays are actually reaching the database */}
@@ -485,6 +576,20 @@ const Index = () => {
                 <p className="text-xs text-muted-foreground mt-2 text-center">Enter to confirm · Esc to reject</p>
               </div>
             )}
+
+            {/* keyed by game so a reset opens both cards for entry again */}
+            <LineupPanel
+              key={startedAt}
+              lineups={lineups}
+              teamNames={shownTeams}
+              batting={batting}
+              dueUp={dueUp}
+              pitching={pitching}
+              pitchCounts={pitchCounts}
+              onChange={handleLineup}
+              onMarkDueUp={handleMarkDueUp}
+              onPitch={handlePitch}
+            />
           </section>
 
           <section className="space-y-6" aria-label="Game so far">

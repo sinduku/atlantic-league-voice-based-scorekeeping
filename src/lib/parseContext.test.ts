@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildParseContext } from "./parseContext";
 import { INITIAL_GAME_STATE, type GameState, type Play } from "@/types/game";
 import type { LoggedPlay } from "./boxScore";
+import { newLineup } from "./lineup";
 
 const play = (overrides: Partial<Play>): Play => ({
   action: "ground out",
@@ -55,5 +56,30 @@ describe("buildParseContext", () => {
     const players = buildParseContext(log, at("top"), TEAMS).players;
     expect(players).toHaveLength(20);
     expect(players[0]).toBe("Player 39");
+  });
+});
+
+describe("buildParseContext with lineups", () => {
+  const order = Array.from({ length: 9 }, (_, i) => `Batter ${i + 1}`);
+  const cards = {
+    away: newLineup(order, "Away Ace"),
+    home: newLineup([], "Clay Holmes"),
+  };
+
+  it("takes the pitcher from the fielding team's card over the plays", () => {
+    const earlier = [logged(play({ pitcher: "Old Starter" }), at("top"))];
+    expect(buildParseContext(earlier, at("top"), TEAMS, { lineups: cards, dueUp: 0 }).pitcher).toBe("Clay Holmes");
+  });
+
+  it("leads the player list with the batting order from whoever is due up", () => {
+    const context = buildParseContext([], at("top"), TEAMS, { lineups: cards, dueUp: 7 });
+    expect(context.players.slice(0, 3)).toEqual(["Batter 8", "Batter 9", "Batter 1"]);
+    expect(context.players).toHaveLength(9);
+  });
+
+  it("works as before for a team with no batting order", () => {
+    const context = buildParseContext([], at("bottom"), TEAMS, { lineups: cards, dueUp: 0 });
+    expect(context.pitcher).toBe("Away Ace");
+    expect(context.players).toEqual([]);
   });
 });

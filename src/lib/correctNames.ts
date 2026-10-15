@@ -190,9 +190,10 @@ export function correctNames(transcript: string, index: NameIndex | null): strin
 }
 
 // the list is ~50KB, so it loads after the page instead of with it
-let loading: Promise<NameIndex> | null = null;
+let loading: Promise<string[]> | null = null;
 
-export function loadNameIndex(): Promise<NameIndex> {
+// every known player, hand-added names first so they win any tie
+export function loadPlayerNames(): Promise<string[]> {
   if (!loading) {
     loading = Promise.all([import("@/data/players.json"), import("@/data/extra-players.txt?raw")]).then(
       ([list, extra]) => {
@@ -201,9 +202,13 @@ export function loadNameIndex(): Promise<NameIndex> {
           .map((l) => l.trim())
           .filter((l) => l && !l.startsWith("#"));
         const players = (list.default as { players: string[][] }).players;
-        return buildNameIndex([...extraNames, ...players.map((p) => p[0])]);
+        return [...extraNames, ...players.map((p) => p[0])];
       }
     );
   }
   return loading;
+}
+
+export function loadNameIndex(): Promise<NameIndex> {
+  return loadPlayerNames().then(buildNameIndex);
 }

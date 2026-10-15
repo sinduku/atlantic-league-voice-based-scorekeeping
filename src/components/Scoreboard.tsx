@@ -3,9 +3,13 @@ import type { GameState } from "@/types/game";
 interface ScoreboardProps {
   state: GameState;
   teamNames?: { away: string; home: string };
+  // from the lineups, when entered
+  atBat?: string | null;
+  pitcher?: string | null;
+  pitches?: number | null;
 }
 
-export function Scoreboard({ state, teamNames = { away: "Away", home: "Home" } }: ScoreboardProps) {
+export function Scoreboard({ state, teamNames = { away: "Away", home: "Home" }, atBat, pitcher, pitches }: ScoreboardProps) {
   const bases = [
     { key: "second" as const, cx: 40, cy: 12 },
     { key: "third" as const, cx: 18, cy: 34 },
@@ -88,6 +92,24 @@ export function Scoreboard({ state, teamNames = { away: "Away", home: "Home" } }
           </div>
         </div>
       </div>
+
+      {(atBat || pitcher) && (
+        <div className="mt-3 pt-3 border-t flex flex-wrap justify-center gap-x-6 gap-y-1 text-sm">
+          {atBat && (
+            <span>
+              <span className="text-muted-foreground">At bat </span>
+              <span className="font-semibold">{atBat}</span>
+            </span>
+          )}
+          {pitcher && (
+            <span>
+              <span className="text-muted-foreground">Pitching </span>
+              <span className="font-semibold">{pitcher}</span>
+              {pitches != null && <span className="text-muted-foreground tabular-nums"> · {pitches} pitches</span>}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

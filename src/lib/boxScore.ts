@@ -10,6 +10,10 @@ export interface LoggedPlay {
   play: Play;
   before: GameState;
   after: GameState;
+  // the batting-order slot (0-8) this plate appearance was credited to, when
+  // the batting team had a lineup entered; who is due up next is worked out
+  // from it, so undoing a play puts the order back too
+  slot?: number | null;
 }
 
 export interface TeamLine {
@@ -48,6 +52,8 @@ const NOT_A_PLATE_APPEARANCE = new Set(["stolen base", "wild pitch", "passed bal
 // a plate appearance that doesn't count as an at bat
 const NOT_AN_AT_BAT = new Set(["walk", "hit by pitch", "sacrifice fly"]);
 
+export const isPlateAppearance = (action: string) => !NOT_A_PLATE_APPEARANCE.has(action.toLowerCase());
+
 export const UNNAMED_BATTER = "Unnamed batter";
 
 export const battingTeam = (half: GameState["half"]): Team => (half === "top" ? "away" : "home");
@@ -83,6 +89,9 @@ export function lineScore(log: LoggedPlay[], current: GameState): LineScore {
 export function battingLines(log: LoggedPlay[]): BattingLine[] {
   const lines = new Map<string, BattingLine>();
   const order: string[] = [];
+  // the first batting-order slot each batter was credited to, so a box score
+  // with a lineup reads 1 through 9 with pinch hitters under who they replaced
+  const slotOf = new Map<string, number>();
 
   const lineFor = (team: Team, name: string) => {
     const key = `${team}:${name.toLowerCase()}`;
@@ -93,13 +102,16 @@ export function battingLines(log: LoggedPlay[]): BattingLine[] {
     return lines.get(key)!;
   };
 
-  for (const { play, before } of log) {
+  for (const { play, before, slot } of log) {
     const team = battingTeam(before.half);
     const action = play.action.toLowerCase();
     const batter = play.batter?.trim() || null;
 
     if (!NOT_A_PLATE_APPEARANCE.has(action)) {
-      const line = lineFor(team, batter ?? UNNAMED_BATTER);
+      const name = batter ?? UNNAMED_BATTER;
+      const key = `${team}:${name.toLowerCase()}`;
+      if (slot != null && !slotOf.has(key)) slotOf.set(key, slot);
+      const line = lineFor(team, name);
       line.pa++;
       if (!NOT_AN_AT_BAT.has(action)) line.ab++;
       if (HIT_ACTIONS.has(action)) line.h++;
@@ -119,7 +131,14 @@ export function battingLines(log: LoggedPlay[]): BattingLine[] {
     }
   }
 
-  return order.map((key) => lines.get(key)!);
+  // away batters then home, each team in batting-order slot; batters without a
+  // slot come after the slotted ones in the order they first appeared, since
+  // Array.sort is stable
+  const teamRank = (key: string) => (lines.get(key)!.team === "away" ? 0 : 1);
+  const position = (key: string) => slotOf.get(key) ?? Number.MAX_SAFE_INTEGER;
+  return [...order]
+    .sort((a, b) => teamRank(a) - teamRank(b) || position(a) - position(b))
+    .map((key) => lines.get(key)!);
 }
 
 export function inningLabel(state: Pick<GameState, "half" | "inning">): string {
