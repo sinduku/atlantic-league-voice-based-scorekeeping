@@ -19,7 +19,13 @@ it falls behind). Replies from either backend are cleaned up in the browser by
 to ones the scoreboard understands, bases and fielders are reduced to plain values, and
 the spray chart zone is worked out from where the ball went.
 
-Changes to the edge function only reach the live site once deployed:
+Changes to the edge function only reach the live site once deployed.
+`.github/workflows/deploy-edge-function.yml` does that whenever anything under
+`supabase/functions/` changes on `main`, and can also be run by hand from the Actions tab.
+It tests first, deploys, then sends one real play to the live function to confirm it works.
+It needs a Supabase access token saved as the `SUPABASE_ACCESS_TOKEN` repository secret.
+
+To deploy by hand instead:
 
 ```bash
 supabase functions deploy parse-play

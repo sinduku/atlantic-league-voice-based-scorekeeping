@@ -1,0 +1,67 @@
+name: Deploy Supabase edge function
+
+# The live site parses plays through supabase/functions/parse-play, and edits
+# to it only take effect once deployed. This redeploys it whenever it changes
+# on main, and can be run by hand from the Actions tab.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "supabase/functions/**"
+      - "supabase/config.toml"
+  workflow_dispatch:
+
+concurrency:
+  group: supabase-functions
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      PROJECT_REF: zivljwsgmzkghaeaffvc
+    steps:
+      - name: Check the access token is set
+        if: env.SUPABASE_ACCESS_TOKEN == ''
+        run: |
+          echo "::error::Add a repository secret named SUPABASE_ACCESS_TOKEN (Settings > Secrets and variables > Actions)."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      # includes the check that the function carries the same prompt as
+      # server/prompt.js, so a stale prompt never goes live
+      - name: Test
+        run: |
+          npm ci --prefix server
+          npm test --prefix server
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy parse-play
+        run: supabase functions deploy parse-play --project-ref "$PROJECT_REF"
+
+      # one real parse, so a deploy that is broken at runtime shows up here
+      # rather than on the live site. the current function reports its model
+      # and timing; the old one did not
+      - name: Check the live function
+        run: |
+          started=$(date +%s%3N)
+          reply=$(curl -s --max-time 60 -X POST \
+            "https://$PROJECT_REF.supabase.co/functions/v1/parse-play" \
+            -H "Content-Type: application/json" \
+            -d '{"transcript":"Soto singles to left"}')
+          elapsed=$(( $(date +%s%3N) - started ))
+          echo "$reply" | jq .
+          echo "$reply" | jq -e '.play.action and .timing.model' > /dev/null \
+            || { echo "::error::The deployed function did not return a play with timing"; exit 1; }
+          echo "::notice::parse-play answered in ${elapsed}ms using $(echo "$reply" | jq -r .timing.model)"
