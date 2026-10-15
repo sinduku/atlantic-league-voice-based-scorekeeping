@@ -111,13 +111,20 @@ AI_MODEL=llama3
    "K looking", "rung up", "ball four", "HBP". Anything longer goes to the AI.
 4. **AI.** The server sends a short prompt (~900 tokens) and asks for JSON only, leaving
    out keys it can't tell, which roughly halves the reply. On Groq this takes well
-   under a second. If the main model is rate limited, the fallback model answers.
+   under a second. The browser also sends who is batting and pitching and the players
+   named so far (`src/lib/parseContext.ts`), so names come back spelled the same way
+   each time. If a reply isn't a usable play the model gets one retry with the problem
+   explained, and if the main model is rate limited, down or too slow the fallback
+   model answers, all inside `AI_TIMEOUT_MS`.
 5. **Check.** `src/lib/checkPlay.ts` compares the play against the bases. A runner
    moved off an empty base, or outs that don't add up, are listed above the play
    and drop it to low confidence.
 
 The review card shows which path scored the play and how long it took. The server
-logs the model time and token counts for every play.
+logs the model time and token counts for every play, each line tagged with a request
+id that is also sent back to the browser (it's printed in the console when a play
+fails), so a failed play can be found in the log. `GET /api/health?deep=1` also checks
+the AI provider accepts the key, for a host's health check.
 
 ### Player names
 

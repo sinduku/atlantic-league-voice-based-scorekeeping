@@ -48,8 +48,27 @@ function describeState(gameState) {
   return `STATE: ${gameState.half || "top"} ${gameState.inning || 1}, ${gameState.outs || 0} outs, away ${gameState.score?.away || 0} home ${gameState.score?.home || 0}, 1st: ${base(r.first)}, 2nd: ${base(r.second)}, 3rd: ${base(r.third)}`;
 }
 
-function buildSystemPrompt(staticPrompt, gameState) {
-  return `${staticPrompt}\n\n${describeState(gameState)}`;
+// names the browser already knows: who is batting and pitching, and the
+// players named so far this game. a few dozen tokens, and it lets the model
+// spell "smith" the way the earlier plays did. callers pass a context that
+// has already been checked (see parseContext in app.js)
+function describeContext(context) {
+  if (!context) return "";
+  const lines = [];
+  const teams = [];
+  if (context.battingTeam) teams.push(`${context.battingTeam} batting`);
+  if (context.fieldingTeam) teams.push(`${context.fieldingTeam} fielding`);
+  if (teams.length) lines.push(`GAME: ${teams.join(", ")}`);
+  if (context.pitcher) lines.push(`PITCHING: ${context.pitcher}`);
+  if (context.players?.length) lines.push(`PLAYERS SO FAR (use these spellings): ${context.players.join(", ")}`);
+  return lines.join("\n");
 }
 
-module.exports = { DEFAULT_FEWSHOT, buildStaticPrompt, describeState, buildSystemPrompt };
+// everything that changes from play to play goes after the static part, so
+// providers that cache prompts still reuse the front of it
+function buildSystemPrompt(staticPrompt, gameState, context) {
+  const extra = describeContext(context);
+  return `${staticPrompt}\n\n${describeState(gameState)}${extra ? `\n${extra}` : ""}`;
+}
+
+module.exports = { DEFAULT_FEWSHOT, buildStaticPrompt, describeState, describeContext, buildSystemPrompt };

@@ -32,6 +32,7 @@ import { normalizePlay } from "@/lib/normalizePlay";
 import { parseShorthand } from "@/lib/shorthand";
 import { correctNames, loadNameIndex, type NameIndex } from "@/lib/correctNames";
 import { checkPlay } from "@/lib/checkPlay";
+import { buildParseContext } from "@/lib/parseContext";
 import { inningLabel, type LoggedPlay, type Team } from "@/lib/boxScore";
 import { battingCsv, downloadCsv, fileBaseName, playByPlayCsv, type GameInfo } from "@/lib/exportCsv";
 import { type Play, type GameState, INITIAL_GAME_STATE, applyPlayToState } from "@/types/game";
@@ -174,12 +175,15 @@ const Index = () => {
       const response = await fetch(PARSE_PLAY_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript, gameState }),
+        body: JSON.stringify({ transcript, gameState, context: buildParseContext(log, gameState, teamNames) }),
         signal: AbortSignal.timeout(PARSE_TIMEOUT_MS),
       });
 
       if (!response.ok) {
         const err = await response.json().catch(() => ({ error: "Request failed" }));
+        // the request id matches this failure to its line in the server log
+        const requestId = err.request_id || response.headers.get("x-request-id");
+        if (requestId) console.error(`[parse] failed, request ${requestId}`);
         throw new Error(err.error || "Failed to process play");
       }
 
