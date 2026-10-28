@@ -57,13 +57,13 @@ jobs:
         with:
           version: latest
 
-      # a project created through Lovable Cloud lives in Lovable's Supabase
-      # account, so a personal token can't see it. say that plainly rather
-      # than leave a bare "unauthorized" from the deploy
+      # asks only for what the deploy needs anyway, so a token scoped to Edge
+      # Functions passes. fails with a plain message rather than a bare
+      # "unauthorized" halfway through the deploy
       - name: Check the token can reach the project
         run: |
-          if ! supabase projects list | grep -q "$PROJECT_REF"; then
-            echo "::error::This access token's Supabase account can't see project $PROJECT_REF. If the project was created through Lovable Cloud, the function has to be redeployed from Lovable instead."
+          if ! supabase functions list --project-ref "$PROJECT_REF" > /dev/null; then
+            echo "::error::This access token can't reach project $PROJECT_REF. Check it was made on the Supabase account that owns the project and has Edge Functions (read-write) and Edge Function Secrets (read-write)."
             exit 1
           fi
 
