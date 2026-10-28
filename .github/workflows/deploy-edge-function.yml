@@ -23,7 +23,6 @@ jobs:
       # optional. with it the function parses with Groq, well under a second;
       # without it, the slower Lovable gateway
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-      PROJECT_REF: zivljwsgmzkghaeaffvc
     steps:
       - name: Check the access token is set
         if: env.SUPABASE_ACCESS_TOKEN == ''
@@ -32,6 +31,14 @@ jobs:
           exit 1
 
       - uses: actions/checkout@v4
+
+      # the project comes from supabase/config.toml, the same file the CLI
+      # reads, so switching projects never means editing this workflow
+      - name: Read the project from supabase/config.toml
+        run: |
+          ref=$(grep '^project_id' supabase/config.toml | cut -d'"' -f2)
+          if [ -z "$ref" ]; then echo "::error::project_id is missing from supabase/config.toml"; exit 1; fi
+          echo "PROJECT_REF=$ref" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:

@@ -40,12 +40,19 @@ jobs:
           npm test --prefix server
 
       # a static site cannot hold the AI key, so the live build parses plays
-      # through the Supabase edge function instead of the Express server
+      # through the Supabase edge function instead of the Express server. the
+      # function lives in whichever project .env points at, so switching
+      # projects never means editing this file
+      - name: Point the build at the Supabase project in .env
+        run: |
+          url=$(grep '^VITE_SUPABASE_URL=' .env | cut -d= -f2- | tr -d '"\r')
+          if [ -z "$url" ]; then echo "::error::VITE_SUPABASE_URL is missing from .env"; exit 1; fi
+          echo "VITE_PARSE_URL=$url/functions/v1/parse-play" >> "$GITHUB_ENV"
+
       - name: Build
         run: npm run build
         env:
           BASE_PATH: /${{ github.event.repository.name }}/
-          VITE_PARSE_URL: https://zivljwsgmzkghaeaffvc.supabase.co/functions/v1/parse-play
 
       # GitHub Pages has no single-page-app fallback, so unknown paths load the
       # app as well and React Router shows its own not-found page

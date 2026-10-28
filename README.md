@@ -216,6 +216,21 @@ npm run check:supabase
 It writes a game and a play, reads them back, deletes them, and prints what
 failed if anything did.
 
+### Moving to a different Supabase project
+
+The project is named in two files only, `.env` and `supabase/config.toml`; both
+workflows read it from there.
+
+1. In the new project's SQL Editor, run
+   `supabase/migrations/20261028000000_games_and_plays.sql`. It creates both tables and
+   the access rules in one go.
+2. Put the new project's URL and publishable key in `.env`, and its project ID (the
+   part of the URL before `.supabase.co`) in `supabase/config.toml`.
+3. Add the `SUPABASE_ACCESS_TOKEN` and `GROQ_API_KEY` repository secrets. The Groq key
+   is required here: the Lovable AI key only exists in projects created by Lovable.
+4. Run **Deploy Supabase edge function** from the Actions tab, then push. The site
+   redeploys pointing at the new project.
+
 ## Scorekeeping shorthand
 
 Scorekeepers do not speak in full sentences. They say "6-4-3", "E5", "F8",
