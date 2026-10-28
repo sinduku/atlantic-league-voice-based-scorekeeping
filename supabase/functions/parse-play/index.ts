@@ -52,11 +52,17 @@ serve(async (req) => {
 
     const groqKey = Deno.env.get("GROQ_API_KEY");
     const gatewayKey = Deno.env.get("LOVABLE_API_KEY");
+    // Groq shut llama-3.3-70b-versatile down on 2026-08-16; gpt-oss-120b is
+    // its listed replacement. Groq retires models often, so PARSE_MODEL can
+    // swap one in without a code change
     const provider = groqKey
-      ? { url: "https://api.groq.com/openai/v1/chat/completions", key: groqKey, model: "llama-3.3-70b-versatile" }
+      ? { url: "https://api.groq.com/openai/v1/chat/completions", key: groqKey, model: "openai/gpt-oss-120b" }
       : { url: "https://ai.gateway.lovable.dev/v1/chat/completions", key: gatewayKey, model: "google/gemini-2.5-flash-lite" };
     if (!provider.key) throw new Error("AI key is not configured");
     const model = Deno.env.get("PARSE_MODEL") || provider.model;
+    // reasoning models think before answering, and that thinking counts
+    // against max_tokens: keep it brief and leave room for the play itself
+    const reasoning = /gpt-oss|qwen3/i.test(model);
 
     const response = await fetch(provider.url, {
       method: "POST",
@@ -70,9 +76,10 @@ serve(async (req) => {
           { role: "system", content: `${STATIC_PROMPT}\n\n${describeState(gameState)}` },
           { role: "user", content: transcript },
         ],
-        max_tokens: 350,
+        max_tokens: reasoning ? 1500 : 350,
         temperature: 0,
         response_format: { type: "json_object" },
+        ...(reasoning ? { reasoning_effort: "low" } : {}),
       }),
       signal: AbortSignal.timeout(8000),
     });
@@ -81,7 +88,9 @@ serve(async (req) => {
       if (response.status === 429) return json({ error: "Rate limited. Please try again shortly." }, 429);
       if (response.status === 402) return json({ error: "AI credits exhausted." }, 402);
       console.error("AI error:", response.status, await response.text());
-      return json({ error: "AI processing failed" }, 500);
+      // the provider's status, so a retired model (400/404) or a bad key (401)
+      // can be told apart without opening the function logs
+      return json({ error: `AI processing failed (${model} answered ${response.status})` }, 500);
     }
 
     const data = await response.json();
