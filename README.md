@@ -24,6 +24,9 @@ Changes to the edge function only reach the live site once deployed.
 `supabase/functions/` changes on `main`, and can also be run by hand from the Actions tab.
 It tests first, deploys, then sends one real play to the live function to confirm it works.
 It needs a Supabase access token saved as the `SUPABASE_ACCESS_TOKEN` repository secret.
+Add a free Groq key as the `GROQ_API_KEY` repository secret too and the workflow passes it
+to the function, which then parses with Groq (well under a second) instead of the slower
+Lovable gateway.
 
 To deploy by hand instead:
 

@@ -20,6 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      # optional. with it the function parses with Groq, well under a second;
+      # without it, the slower Lovable gateway
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       PROJECT_REF: zivljwsgmzkghaeaffvc
     steps:
       - name: Check the access token is set
@@ -46,6 +49,20 @@ jobs:
       - uses: supabase/setup-cli@v1
         with:
           version: latest
+
+      # a project created through Lovable Cloud lives in Lovable's Supabase
+      # account, so a personal token can't see it. say that plainly rather
+      # than leave a bare "unauthorized" from the deploy
+      - name: Check the token can reach the project
+        run: |
+          if ! supabase projects list | grep -q "$PROJECT_REF"; then
+            echo "::error::This access token's Supabase account can't see project $PROJECT_REF. If the project was created through Lovable Cloud, the function has to be redeployed from Lovable instead."
+            exit 1
+          fi
+
+      - name: Set the Groq key on the function
+        if: env.GROQ_API_KEY != ''
+        run: supabase secrets set GROQ_API_KEY="$GROQ_API_KEY" --project-ref "$PROJECT_REF"
 
       - name: Deploy parse-play
         run: supabase functions deploy parse-play --project-ref "$PROJECT_REF"
