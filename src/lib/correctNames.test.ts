@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildNameIndex, correctNames, soundKey } from "./correctNames";
+import players from "@/data/players.json";
 
 const index = buildNameIndex([
   "Ronald Acuña Jr.",
@@ -46,5 +47,42 @@ describe("correctNames", () => {
   it("gives sound-alike spellings the same key", () => {
     expect(soundKey("Sánchez")).toBe(soundKey("sanches"));
     expect(soundKey("Phillips")).toBe(soundKey("Filips"));
+  });
+});
+
+// against the real player list: everyday scorekeeping words sit a letter or a
+// sound away from somebody's surname, and each of these once came back as one
+describe("correctNames with the full player list", () => {
+  const league = buildNameIndex((players as { players: string[][] }).players.map((p) => p[0]));
+
+  it.each([
+    "Dickerson reaches when the shortstop bobbles it",
+    "he beats the throw",
+    "a chopper to third",
+    "a frozen rope into the gap",
+    "can of corn to left",
+    "dinger to left",
+    "throwing error on the third baseman",
+    "around third and heads home",
+    "about to score",
+    "still at second",
+    "throws wide of first",
+    "where did the runner go",
+    "after the throw he was safe",
+    "slow roller to short",
+    "dribbler down the line",
+    "blooper to shallow center",
+    "plunked on the elbow",
+    "rung up on a curve",
+    "twin killing to end the inning",
+    "booted by the shortstop",
+    "tags up and scores",
+    "runners hold",
+  ])("leaves %j alone", (phrase) => {
+    expect(correctNames(phrase, league).toLowerCase()).toBe(phrase.toLowerCase());
+  });
+
+  it("still corrects a misheard real name", () => {
+    expect(correctNames("mookie bets doubles", league)).toContain("Betts");
   });
 });

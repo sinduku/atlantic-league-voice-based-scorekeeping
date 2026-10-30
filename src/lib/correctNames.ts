@@ -40,7 +40,14 @@ const NOT_NAMES = new Set(
   takes take took goes go went move moves moved advance advances advanced
   deep shallow hard soft sharp slow medium over back middle hole way
   inning top bottom count full fastball curve curveball slider changeup sinker cutter splitter
-  rbi dp tp hbp k e f l p u g`.split(/\s+/)
+  rbi dp tp hbp k e f l p u g
+  when where what who why how while after before until because just again still also very gets got get
+  under through around about across along against behind beside between beyond near past toward towards upon within without
+  beats beat beaten chopper choppers rope ropes frozen laser lasers corn blooper bloop texas leaguer dribbler nubber roller
+  rollers burner worm dinger dingers jack jacks bomb bombs yard plunked drilled rung twin killing turned booted bobbles
+  bobbled misplays misplayed fumbles fumbled throwing wide high low baseman basemen scampers scampered slides slid heads
+  heading reaches reached bounces bounced hopper hustles dives dove diving robs robbed snags snagged grabs grabbed charges
+  charging relay cutoff gloves glove barehanded backhand backhanded`.split(/\s+/)
 );
 
 const stripAccents = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "");
