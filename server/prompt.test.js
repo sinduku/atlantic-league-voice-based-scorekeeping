@@ -44,3 +44,26 @@ test("a missing game state reads as the start of the game", () => {
 test("the edge function carries the current prompt (run npm run sync:prompt)", () => {
   assert.equal(readEdgePrompt(), buildStaticPrompt(), "supabase/functions/parse-play/index.ts is out of date");
 });
+
+test("the batter due up goes in the context, marked as overridable", () => {
+  const { describeContext } = require("./prompt.js");
+  const text = describeContext({ batter: "Juan Soto", players: [] });
+  assert.match(text, /^AT BAT: Juan Soto \(the batter unless the words name another\)$/m);
+  assert.equal(describeContext({ players: [] }), "");
+});
+
+// the edge function carries its own copy of describeContext for the live
+// site; this catches the two drifting apart
+test("the edge function describes context with the same lines as the server", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const { describeContext } = require("./prompt.js");
+  const edge = fs.readFileSync(path.join(__dirname, "..", "supabase", "functions", "parse-play", "index.ts"), "utf8");
+  const sample = describeContext({ battingTeam: "A", fieldingTeam: "B", batter: "C", pitcher: "D", players: ["E"] });
+  for (const line of sample.split("\n")) {
+    const label = line.slice(0, line.indexOf(":") + 1);
+    assert.ok(edge.includes(`${label} `), `edge function is missing "${label}"`);
+  }
+  assert.ok(edge.includes("(the batter unless the words name another)"), "edge function's AT BAT line differs");
+  assert.ok(/batter: cleanName\(input\.batter\)/.test(edge), "edge function doesn't read the batter from the context");
+});

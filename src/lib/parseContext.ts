@@ -10,6 +10,8 @@ export interface ParseContext {
   battingTeam?: string;
   fieldingTeam?: string;
   pitcher?: string;
+  // the lineup's batter due up, so "he singles" has a name
+  batter?: string;
   players: string[];
 }
 
@@ -75,6 +77,7 @@ export function buildParseContext(
 
   return {
     battingTeam: teamName(batting),
+    batter: order && hasBattingOrder(order) ? currentBatter(order, cards!.dueUp) ?? undefined : undefined,
     fieldingTeam: teamName(fielding),
     pitcher,
     players: players.slice(0, MAX_PLAYERS),

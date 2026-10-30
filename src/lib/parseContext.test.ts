@@ -83,3 +83,17 @@ describe("buildParseContext with lineups", () => {
     expect(context.players).toEqual([]);
   });
 });
+
+describe("buildParseContext and the batter due up", () => {
+  const order = Array.from({ length: 9 }, (_, i) => `Batter ${i + 1}`);
+  const cards = { away: newLineup(order, ""), home: newLineup([], "") };
+
+  it("names the batter due up, so pronouns in the words have someone to mean", () => {
+    expect(buildParseContext([], at("top"), TEAMS, { lineups: cards, dueUp: 4 }).batter).toBe("Batter 5");
+  });
+
+  it("leaves it out without a batting order", () => {
+    expect(buildParseContext([], at("bottom"), TEAMS, { lineups: cards, dueUp: 0 }).batter).toBeUndefined();
+    expect(buildParseContext([], at("top"), TEAMS).batter).toBeUndefined();
+  });
+});

@@ -56,6 +56,8 @@ function parseContext(raw) {
     battingTeam: cleanName(raw.battingTeam),
     fieldingTeam: cleanName(raw.fieldingTeam),
     pitcher: cleanName(raw.pitcher),
+    // the lineup's batter due up, so "he singles" has a name
+    batter: cleanName(raw.batter),
     players,
   };
 }

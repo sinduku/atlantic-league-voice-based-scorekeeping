@@ -28,6 +28,8 @@ interface PlayCardProps {
   play: Play;
   onConfirm: () => void;
   onReject: () => void;
+  // while the scorer still owes an answer about the play
+  confirmDisabled?: boolean;
 }
 
 const confidenceColors: Record<string, string> = {
@@ -36,7 +38,7 @@ const confidenceColors: Record<string, string> = {
   low: "bg-destructive text-destructive-foreground",
 };
 
-export function PlayCard({ play, onConfirm, onReject }: PlayCardProps) {
+export function PlayCard({ play, onConfirm, onReject, confirmDisabled = false }: PlayCardProps) {
   return (
     <Card className="border-2 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <CardHeader className="pb-3">
@@ -155,7 +157,12 @@ export function PlayCard({ play, onConfirm, onReject }: PlayCardProps) {
       </CardContent>
 
       <CardFooter className="gap-3 pt-4">
-        <Button onClick={onConfirm} className="flex-1 bg-success hover:bg-success/90 text-success-foreground">
+        <Button
+          onClick={onConfirm}
+          disabled={confirmDisabled}
+          title={confirmDisabled ? "Answer the question above first" : undefined}
+          className="flex-1 bg-success hover:bg-success/90 text-success-foreground"
+        >
           <Check className="w-4 h-4 mr-2" /> Confirm
         </Button>
         <Button onClick={onReject} variant="outline" className="flex-1 border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground">

@@ -179,6 +179,11 @@ test("context that isn't plain names is dropped, not passed into the prompt", ()
   assert.equal(parseContext(null), null);
 });
 
+test("the batter due up passes through the context, cleaned like any name", () => {
+  assert.equal(parseContext({ batter: "  Juan   Soto ", players: [] }).batter, "Juan Soto");
+  assert.equal(parseContext({ batter: { name: "Soto" }, players: [] }).batter, undefined);
+});
+
 test("a missing transcript is refused before calling the model", async () => {
   await withServer([], async (base, calls) => {
     const missing = await parse(base, { gameState: {} });

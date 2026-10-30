@@ -30,6 +30,8 @@ import {
 import { toast } from "sonner";
 import { createGame, deletePlay, savePlay, type SaveResult } from "@/lib/persistence";
 import { normalizePlay } from "@/lib/normalizePlay";
+import { describePlay, isSkip, matchAnswer, openQuestions, type ClarifyOption } from "@/lib/clarify";
+import { ClarifyPanel } from "@/components/ClarifyPanel";
 import { parseShorthand } from "@/lib/shorthand";
 import { buildNameIndex, correctNames, loadPlayerNames } from "@/lib/correctNames";
 import { checkPlay } from "@/lib/checkPlay";
@@ -121,6 +123,16 @@ const Index = () => {
   const [pitchCounts, setPitchCounts] = useState<Record<string, number>>(restored?.pitchCounts ?? {});
   // the batting-order slot the play under review will be credited to
   const [pendingSlot, setPendingSlot] = useState<number | null>(null);
+  // the play under review as the parser and lineup left it, before any of the
+  // scorer's answers, so "Start over" can go back to it
+  const [reviewBase, setReviewBase] = useState<{
+    play: Play;
+    lineupWarnings: string[];
+    transcript: string;
+    resolved: string[];
+  } | null>(null);
+  // questions about the play under review that have been answered or skipped
+  const [resolved, setResolved] = useState<string[]>([]);
 
   const confirmedPlays = log.map((e) => e.play);
 
@@ -196,12 +208,38 @@ const Index = () => {
     return result;
   };
 
-  const showPlay = (play: Play, info: ParseInfo) => {
+  // names to offer when nobody said who batted: this team's batters so far,
+  // most recent first
+  const batterSuggestions = useMemo(() => {
+    const names: string[] = [];
+    for (let i = log.length - 1; i >= 0; i--) {
+      const { play, before } = log[i];
+      const name = play.batter?.trim();
+      if (battingTeam(before.half) === batting && name && !names.some((n) => n.toLowerCase() === name.toLowerCase())) names.push(name);
+    }
+    return names;
+  }, [log, batting]);
+
+  // what the words left open about the play under review, worked out again
+  // after every answer since one answer can change what the next should offer
+  const questions = useMemo(
+    () =>
+      currentPlay && reviewBase
+        ? openQuestions(currentPlay, { state: gameState, transcript: reviewBase.transcript, resolved, batterSuggestions })
+        : [],
+    [currentPlay, reviewBase, gameState, resolved, batterSuggestions]
+  );
+  const question = questions[0] ?? null;
+  const mustAnswer = questions.some((q) => q.required);
+
+  const showPlay = (play: Play, info: ParseInfo, transcript: string, alreadyResolved: string[] = []) => {
     // the lineup fills the batter and pitcher first, so the base check sees
     // the real names
     const lined = applyLineup(play, gameState, lineups, dueUp[batting], shownTeams);
     const checked = checkPlay(lined.play, gameState);
     const allWarnings = [...lined.warnings, ...checked.warnings];
+    setReviewBase({ play: checked.play, lineupWarnings: lined.warnings, transcript, resolved: alreadyResolved });
+    setResolved(alreadyResolved);
     setCurrentPlay(checked.play);
     setWarnings(allWarnings);
     setPendingSlot(lined.slot);
@@ -212,18 +250,68 @@ const Index = () => {
     );
   };
 
-  const handleTranscript = async (rawTranscript: string) => {
+  // the scorer's answer to the open question, picked from its options, or the
+  // play parsed again when the answer changes what kind of play it was
+  const handlePick = (option: ClarifyOption) => {
+    if (!question || !currentPlay) return;
+    if (option.reparse) {
+      handleTranscript(option.reparse, { resolved: ["action"], asAnswer: false });
+      return;
+    }
+    settle(option.play, [question.id, ...(option.resolves ?? [])]);
+  };
+
+  // takes an answered play: the base checks run again, since an answer can
+  // fix or cause an outs mismatch
+  const settle = (next: Play, ids: string[]) => {
+    // the parser's description may state what the scorer just contradicted
+    const rechecked = checkPlay({ ...next, description: describePlay(next, gameState) }, gameState);
+    setCurrentPlay(rechecked.play);
+    setWarnings([...(reviewBase?.lineupWarnings ?? []), ...rechecked.warnings]);
+    setResolved((prev) => [...prev, ...ids]);
+  };
+
+  const handleSkip = () => {
+    if (question && currentPlay) settle(currentPlay, [question.id]);
+  };
+
+  const handleStartOver = () => {
+    if (!reviewBase) return;
+    const rechecked = checkPlay(reviewBase.play, gameState);
+    setCurrentPlay(rechecked.play);
+    setWarnings([...reviewBase.lineupWarnings, ...rechecked.warnings]);
+    setResolved(reviewBase.resolved);
+  };
+
+  // spoken or typed words while a question is open are its answer, not a new play
+  const handleAnswerText = (raw: string) => {
+    if (!question || !currentPlay) return;
+    const text = correctNames(raw, nameIndex);
+    if (!question.required && isSkip(text)) return handleSkip();
+    const option = matchAnswer(question, text);
+    if (option) return handlePick(option);
+    if (question.textEntry && !isSkip(text)) return settle(question.textEntry.apply(text), [question.id]);
+    toast.error(`Didn't catch that. ${question.prompt} Tap an answer or say it again.`);
+  };
+
+  const handleTranscript = async (rawTranscript: string, opts: { resolved?: string[]; asAnswer?: boolean } = {}) => {
+    if (opts.asAnswer !== false && currentPlay && question) {
+      handleAnswerText(rawTranscript);
+      return;
+    }
     const started = performance.now();
     const transcript = correctNames(rawTranscript, nameIndex);
     setLastTranscript(transcript);
     setCurrentPlay(null);
+    setReviewBase(null);
+    setResolved([]);
     setWarnings([]);
     setParseInfo(null);
 
     // plain shorthand ("6-3", "K looking") is scored right here, no network
     const local = parseShorthand(transcript, gameState);
     if (local) {
-      showPlay(local, { source: "shorthand", ms: Math.round(performance.now() - started) });
+      showPlay(local, { source: "shorthand", ms: Math.round(performance.now() - started) }, transcript, opts.resolved);
       return;
     }
 
@@ -251,11 +339,12 @@ const Index = () => {
       const data = await response.json();
       const parsed = normalizePlay(data?.play);
       if (parsed.ok) {
-        showPlay(parsed.play, {
-          source: "ai",
-          ms: Math.round(performance.now() - started),
-          model: data?.timing?.model,
-        });
+        showPlay(
+          parsed.play,
+          { source: "ai", ms: Math.round(performance.now() - started), model: data?.timing?.model },
+          transcript,
+          opts.resolved
+        );
       } else {
         toast.error("Couldn't parse that into a play. Try again.");
       }
@@ -280,10 +369,15 @@ const Index = () => {
 
   const handleConfirm = async () => {
     if (!currentPlay) return;
+    if (mustAnswer) {
+      toast(`One more detail first: ${question?.prompt}`);
+      return;
+    }
 
     // the play is accepted locally first so the scoreboard never waits on the
-    // network; persistence catches up behind it
-    const play = currentPlay;
+    // network; persistence catches up behind it. the readings the scorer
+    // already chose between aren't part of the record
+    const play: Play = { ...currentPlay, alternatives: null };
     const playIndex = log.length;
     const before = gameState;
     const after = applyPlayToState(before, play);
@@ -316,6 +410,8 @@ const Index = () => {
 
   const handleReject = () => {
     setCurrentPlay(null);
+    setReviewBase(null);
+    setResolved([]);
     setWarnings([]);
     setPendingSlot(null);
     toast("Play rejected. Try recording again.");
@@ -353,6 +449,8 @@ const Index = () => {
     setMarkedUp(NOBODY_MARKED);
     setPitchCounts({});
     setPendingSlot(null);
+    setReviewBase(null);
+    setResolved([]);
     toast.success("New game started!");
   };
 
@@ -370,11 +468,18 @@ const Index = () => {
       return { ...prev, [key]: Math.max(0, (prev[key] ?? 0) + delta) };
     });
 
-  // Enter confirms the play under review, Escape rejects it
+  // Enter confirms the play under review, Escape rejects it, and while a
+  // question is open the number keys pick its answers
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!currentPlay || isTyping(e.target)) return;
-      if (e.key === "Enter") {
+      if (question && /^[1-9]$/.test(e.key)) {
+        const option = question.options[Number(e.key) - 1];
+        if (option) {
+          e.preventDefault();
+          handlePick(option);
+        }
+      } else if (e.key === "Enter") {
         e.preventDefault();
         handleConfirm();
       } else if (e.key === "Escape") {
@@ -527,7 +632,9 @@ const Index = () => {
                   <Input
                     value={typed}
                     onChange={(e) => setTyped(e.target.value)}
-                    placeholder='Or type a play: "6-3", "Judge doubles to left"'
+                    placeholder={
+                      question ? 'Answer here: "scored", "third", "held"' : 'Or type a play: "6-3", "Judge doubles to left"'
+                    }
                     className="pl-9"
                     aria-label="Type a play"
                     disabled={isProcessing}
@@ -572,8 +679,24 @@ const Index = () => {
                     ))}
                   </ul>
                 )}
-                <PlayCard play={currentPlay} onConfirm={handleConfirm} onReject={handleReject} />
-                <p className="text-xs text-muted-foreground mt-2 text-center">Enter to confirm · Esc to reject</p>
+                {question && (
+                  <div className="mb-3">
+                    <ClarifyPanel
+                      key={question.id}
+                      question={question}
+                      remaining={questions.length}
+                      answered={resolved.length - (reviewBase?.resolved.length ?? 0)}
+                      onPick={handlePick}
+                      onText={(text) => handleAnswerText(text)}
+                      onSkip={handleSkip}
+                      onStartOver={handleStartOver}
+                    />
+                  </div>
+                )}
+                <PlayCard play={currentPlay} onConfirm={handleConfirm} onReject={handleReject} confirmDisabled={mustAnswer} />
+                <p className="text-xs text-muted-foreground mt-2 text-center">
+                  {mustAnswer ? "Answer above to confirm · Esc to reject" : "Enter to confirm · Esc to reject"}
+                </p>
               </div>
             )}
 

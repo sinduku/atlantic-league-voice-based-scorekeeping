@@ -216,6 +216,7 @@ function buildPlaySchema(markPatched: () => void) {
     pitch_location: soft(z.string()),
     count: soft(z.string()),
     confidence: patch(z.enum(["high", "medium", "low"]), "low"),
+    alternatives: soft(z.array(z.string())),
   });
 }
 
@@ -271,6 +272,18 @@ export function normalizePlay(raw: unknown): NormalizeResult {
     fieldZone = derived ?? input.field_zone;
   }
 
+  // the other readings the parser offered, in the app's own action names, and
+  // only ones that differ from the action it picked
+  let alternatives: string[] | null = null;
+  if (Array.isArray(input.alternatives)) {
+    const known = new Set(CANONICAL_ACTIONS);
+    const readings = input.alternatives
+      .filter((a): a is string => typeof a === "string")
+      .map((a) => normalizeAction(a, hitType))
+      .filter((a) => known.has(a) && a !== action);
+    alternatives = readings.length ? [...new Set(readings)] : null;
+  }
+
   const play = buildPlaySchema(markPatched).parse({
     ...input,
     action,
@@ -278,6 +291,7 @@ export function normalizePlay(raw: unknown): NormalizeResult {
     fielders_involved: fielders,
     runners,
     field_zone: fieldZone,
+    alternatives,
   });
 
   if (patched) play.confidence = "low";

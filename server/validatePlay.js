@@ -52,6 +52,8 @@ function buildPlaySchema(markPatched) {
     pitch_location: soft(z.string()),
     count: soft(z.string()),
     confidence: patch(z.enum(["high", "medium", "low"]), "low"),
+    // other actions the words could also mean; the browser asks the scorer
+    alternatives: soft(z.array(z.string())),
   });
 }
 

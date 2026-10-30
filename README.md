@@ -122,6 +122,30 @@ AI_MODEL=llama3
 5. **Check.** `src/lib/checkPlay.ts` compares the play against the bases. A runner
    moved off an empty base, or outs that don't add up, are listed above the play
    and drop it to low confidence.
+6. **Ask.** `src/lib/clarify.ts` works out what the words left open and asks rather
+   than guessing, one question at a time, and Confirm stays locked until it's
+   answered. It asks only when the rules and the situation leave more than one
+   legal outcome:
+   - where a runner the words didn't mention ended up on a hit or an error
+   - whether a grounder with a man on first was a double play, a force at second
+     or an out at first
+   - whether runners tagged up on a fly ball to the outfield (a run makes it a
+     sacrifice fly)
+   - who stole, or who moved up on a wild pitch, when more than one runner could
+     have
+   - who made an error, who batted if there's no lineup, and (optionally) where a
+     hit went
+   - which play it was, when the AI says the words fit more than one
+
+   A triple, a walk, a pop up, or anything with two outs that ends the inning never
+   asks. Answer by tapping, by pressing the option's number, or by saying or typing
+   it ("he scored", "third", "held", "double play", "yes"). Each option lists only
+   legal outcomes given the forces and the runners already settled, and once
+   anything is answered, the play's description is rewritten from the answers so
+   the log and exports never repeat a guess.
+
+The live parser is told the same game context as the local server: teams, pitcher,
+players named so far, and the batter due up, so "he singles" has a name.
 
 The review card shows which path scored the play and how long it took. The server
 logs the model time and token counts for every play, each line tagged with a request
@@ -149,6 +173,8 @@ in `src/data/extra-players.txt`.
 - ⚡ Plain shorthand ("6-3", "F8", "K looking") scored instantly in the browser
 - 🤖 AI-powered play parsing (batter, action, runners, RBIs) for everything else
 - ✅ Every play checked against the bases before you confirm it (Enter confirms, Esc rejects)
+- ❓ When the words leave a play open (did the runner score? double play or fielder's
+  choice?), the app asks instead of guessing, and you can answer by voice
 - 📊 Live scoreboard and line score (runs by inning, R / H / E) with your team names
 - 🎯 Spray chart placed by direction and how the ball was hit; filled dots are hits,
   hollow are outs, and it filters by team

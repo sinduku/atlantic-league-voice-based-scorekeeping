@@ -29,6 +29,9 @@ export interface Play {
   pitch_location?: string | null;
   count?: string | null;
   confidence: "high" | "medium" | "low";
+  // other actions the words could equally mean, when the parser saw more than
+  // one reading; the scorer is asked to pick
+  alternatives?: string[] | null;
 }
 
 export const INITIAL_GAME_STATE: GameState = {

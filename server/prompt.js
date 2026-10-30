@@ -26,6 +26,7 @@ fielders_involved: position numbers as strings
 hit_type: ground ball | line drive | fly ball | pop up | bunt. hit_location: e.g. shortstop, left-center gap. hit_hardness: soft | medium | hard
 pitch_type, pitch_location, count: only if said
 confidence: high | medium | low
+alternatives: only when the words fit more than one action just as well ("reached when the shortstop booted it": error or single), the other actions; the scorer is asked to pick
 
 RULES
 - Only runners listed in STATE are on base. Never move a runner off an empty base; if the words seem to, confidence low.
@@ -59,6 +60,7 @@ function describeContext(context) {
   if (context.battingTeam) teams.push(`${context.battingTeam} batting`);
   if (context.fieldingTeam) teams.push(`${context.fieldingTeam} fielding`);
   if (teams.length) lines.push(`GAME: ${teams.join(", ")}`);
+  if (context.batter) lines.push(`AT BAT: ${context.batter} (the batter unless the words name another)`);
   if (context.pitcher) lines.push(`PITCHING: ${context.pitcher}`);
   if (context.players?.length) lines.push(`PLAYERS SO FAR (use these spellings): ${context.players.join(", ")}`);
   return lines.join("\n");
