@@ -35,9 +35,8 @@ const FIELD_ZONES = {
   9: "infield / catcher area",
 };
 
-// Actions the parser is allowed to emit. Caught stealing, pickoffs and
-// sacrifice bunts have no action of their own yet - a sac bunt is recorded as
-// a ground out with hit_type "bunt".
+// Actions the parser is allowed to emit. src/lib/normalizePlay.ts keeps the
+// same list for the browser.
 const ACTIONS = [
   "single",
   "double",
@@ -46,15 +45,20 @@ const ACTIONS = [
   "strikeout",
   "walk",
   "fly out",
+  "line out",
+  "pop out",
   "ground out",
   "hit by pitch",
   "error",
   "fielder's choice",
   "stolen base",
+  "caught stealing",
+  "pickoff",
   "wild pitch",
   "passed ball",
   "balk",
   "sacrifice fly",
+  "sacrifice bunt",
 ];
 
 // The first FEWSHOT_EXAMPLES of these go into the prompt, so the ones that
@@ -284,7 +288,7 @@ const EXAMPLES = [
   {
     transcript: "L7",
     play: {
-      action: "fly out",
+      action: "line out",
       description: "Line drive to left field, caught by the left fielder",
       runners: [{ from: "home", to: "out", runner: null }],
       rbi: 0,
@@ -300,7 +304,7 @@ const EXAMPLES = [
   {
     transcript: "P4",
     play: {
-      action: "fly out",
+      action: "pop out",
       description: "Pop up to the second baseman",
       runners: [{ from: "home", to: "out", runner: null }],
       rbi: 0,
@@ -418,6 +422,49 @@ const EXAMPLES = [
     },
   },
   {
+    transcript: "Soto caught stealing second, two six",
+    play: {
+      action: "caught stealing",
+      description: "Soto caught stealing second, catcher to shortstop",
+      runners: [{ from: "1st", to: "out", runner: "Soto" }],
+      rbi: 0,
+      outs_recorded: 1,
+      fielders_involved: ["2", "6"],
+      confidence: "high",
+    },
+  },
+  {
+    transcript: "pitcher picks him off first",
+    play: {
+      action: "pickoff",
+      description: "Runner picked off first, pitcher to first baseman",
+      runners: [{ from: "1st", to: "out", runner: null }],
+      rbi: 0,
+      outs_recorded: 1,
+      fielders_involved: ["1", "3"],
+      confidence: "high",
+    },
+  },
+  {
+    transcript: "sac bunt, runner moves to second, one three",
+    play: {
+      action: "sacrifice bunt",
+      description: "Sacrifice bunt, pitcher to first, runner to second",
+      runners: [
+        { from: "1st", to: "2nd", runner: null },
+        { from: "home", to: "out", runner: null },
+      ],
+      rbi: 0,
+      outs_recorded: 1,
+      fielders_involved: ["1", "3"],
+      hit_location: "pitcher",
+      hit_type: "bunt",
+      hit_hardness: "soft",
+      field_zone: 9,
+      confidence: "high",
+    },
+  },
+  {
     transcript: "double off the wall in left center",
     play: {
       action: "double",
@@ -437,7 +484,7 @@ const EXAMPLES = [
 
 // Runs scored on these do not credit the batter with an RBI, so an example can
 // legitimately show a runner reaching home with rbi 0.
-const NO_RBI_ACTIONS = ["passed ball", "wild pitch", "balk", "error", "stolen base"];
+const NO_RBI_ACTIONS = ["passed ball", "wild pitch", "balk", "error", "stolen base", "caught stealing", "pickoff"];
 
 // drops null/undefined at every level so the prompt does not pay tokens for
 // empty fields, including inside the runners array
@@ -458,8 +505,9 @@ function compact(value) {
 const SLANG = [
   "walk: BB, ball four, free pass. hit by pitch: HBP, plunked, drilled. strikeout: K, punched out; looking: backwards K, rung up",
   "home run: HR, homer, dinger, jack, bomb, goes yard; solo shot = nobody on; grand slam = bases loaded, 4 rbi",
-  "SF = sacrifice fly. sac bunt = ground out, hit_type bunt. FC, SB, WP, PB, BK = fielder's choice, stolen base, wild pitch, passed ball, balk. 1B/2B/3B as a play = single/double/triple",
-  "double play (DP, turned two, twin killing) = 2 outs, action ground out, or fly out if caught in the air",
+  "SF = sacrifice fly. SH, sac bunt, sacrifice = sacrifice bunt (batter out, runners move up). FC, SB, CS, WP, PB, BK = fielder's choice, stolen base, caught stealing, wild pitch, passed ball, balk. PO, picked off = pickoff. 1B/2B/3B as a play = single/double/triple",
+  "lined out, liner caught = line out. popped up, pop fly caught, infield fly = pop out. fly out = fly ball caught",
+  "double play (DP, turned two, twin killing) = 2 outs, action ground out, or line out / fly out if caught in the air",
   "line drive: liner, frozen rope, laser. fly ball: can of corn, blooper, Texas Leaguer. ground ball: chopper, dribbler, nubber, roller, worm burner",
 ];
 

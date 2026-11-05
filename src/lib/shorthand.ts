@@ -158,6 +158,31 @@ export function parseShorthand(transcript: string, state: GameState): Play | nul
     );
   }
 
+  // CS / picked off, optionally with the throw ("cs 2 6", "picked off 1 3").
+  // only with one runner on, so there's no doubt who it was
+  m = s.match(/^(cs|caught stealing|thrown out stealing|po|pick ?off|picked off)(?: ([1-9](?: [1-9]){1,2}))?$/);
+  if (m) {
+    const on = (["first", "second", "third"] as const).filter((k) => state.runners[k]);
+    if (on.length !== 1) return null;
+    const key = on[0];
+    const base = key === "first" ? "1st" : key === "second" ? "2nd" : "3rd";
+    const stealing = /^(cs|caught|thrown)/.test(m[1]);
+    const next = key === "first" ? "second" : key === "second" ? "third" : "home";
+    const runner = state.runners[key];
+    // the usual throw: catcher to whoever covers, pitcher to the base
+    const cover = stealing ? (key === "first" ? ["2", "6"] : key === "second" ? ["2", "5"] : ["2"]) : key === "first" ? ["1", "3"] : key === "second" ? ["1", "6"] : ["1", "5"];
+    return play(
+      {
+        action: stealing ? "caught stealing" : "pickoff",
+        description: stealing ? `${runner} caught stealing ${next}` : `${runner} picked off ${key}`,
+        runners: [{ from: base, to: "out", runner }],
+        outs_recorded: 1,
+        fielders_involved: m[2] ? m[2].split(" ") : cover,
+      },
+      state
+    );
+  }
+
   // E5, "error 5", "error on the 5"
   m = s.match(/^(?:e|error)(?: on)?(?: the)? ([1-9])$/);
   if (m) {
@@ -182,7 +207,7 @@ export function parseShorthand(transcript: string, state: GameState): Play | nul
     const fielder = m[2];
     return play(
       {
-        action: "fly out",
+        action: hitType === "line drive" ? "line out" : hitType === "pop up" ? "pop out" : "fly out",
         description: `${hitType === "line drive" ? "Line out" : hitType === "pop up" ? "Pop out" : "Fly out"} to ${POSITION_NAMES[fielder]}`,
         runners: batterOut,
         outs_recorded: 1,

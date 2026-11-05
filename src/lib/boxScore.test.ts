@@ -92,3 +92,39 @@ describe("lineScore and battingLines", () => {
     expect(lineScore([], { ...INITIAL_GAME_STATE, inning: 11 }).innings).toBe(11);
   });
 });
+
+describe("left on base", () => {
+  const single = (batter: string, extra: Play["runners"] = []) =>
+    play({ action: "single", batter, runners: [...extra, { from: "home", to: "1st", runner: batter }] });
+
+  it("counts the runners stranded when the third out is made", () => {
+    const { log, state } = playGame([single("A"), single("B", [{ from: "1st", to: "2nd", runner: "A" }]), out("C"), out("D"), out("E")]);
+    expect(lineScore(log, state).away.lob).toBe(2);
+    expect(lineScore(log, state).home.lob).toBe(0);
+  });
+
+  it("counts the batter left on first when a runner is thrown out for the third out", () => {
+    const thrownOut = { ...single("D", [{ from: "1st", to: "out", runner: "C" }]), outs_recorded: 1 };
+    const { log, state } = playGame([out("A"), out("B"), single("C"), thrownOut]);
+    expect(state.half).toBe("bottom");
+    expect(lineScore(log, state).away.lob).toBe(1);
+  });
+
+  it("doesn't count runners in a half-inning still going", () => {
+    const { log, state } = playGame([single("A")]);
+    expect(lineScore(log, state).away.lob).toBe(0);
+  });
+
+  it("treats sacrifice bunts as plate appearances but not at bats", () => {
+    const { log } = playGame([
+      play({ action: "sacrifice bunt", batter: "A", runners: [{ from: "home", to: "out", runner: "A" }], outs_recorded: 1 }),
+    ]);
+    expect(battingLines(log)[0]).toMatchObject({ pa: 1, ab: 0 });
+  });
+
+  it("doesn't charge caught stealing or a pickoff to the batter", () => {
+    const state = { ...INITIAL_GAME_STATE, runners: { first: "A", second: null, third: null } };
+    const cs = play({ action: "caught stealing", batter: "B", runners: [{ from: "1st", to: "out", runner: "A" }], outs_recorded: 1 });
+    expect(battingLines([{ play: cs, before: state, after: applyPlayToState(state, cs) }])).toEqual([]);
+  });
+});

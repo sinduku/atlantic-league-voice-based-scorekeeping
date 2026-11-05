@@ -1,0 +1,2145 @@
+diff --git a/README.md b/README.md
+index 29b79fe..5819bca 100644
+--- a/README.md
++++ b/README.md
+@@ -129,10 +129,11 @@ AI_MODEL=llama3
+    - where a runner the words didn't mention ended up on a hit or an error
+    - whether a grounder with a man on first was a double play, a force at second
+      or an out at first
+-   - whether runners tagged up on a fly ball to the outfield (a run makes it a
+-     sacrifice fly)
+-   - who stole, or who moved up on a wild pitch, when more than one runner could
+-     have
++   - whether runners tagged up on a fly ball or line drive caught in the outfield
++     (a run makes it a sacrifice fly)
++   - who stole, who was caught stealing or picked off, or who moved up on a wild
++     pitch, when more than one runner could have
++   - where a runner who wasn't forced ended up on a sacrifice bunt
+    - who made an error, who batted if there's no lineup, and (optionally) where a
+      hit went
+    - which play it was, when the AI says the words fit more than one
+@@ -175,19 +176,34 @@ in `src/data/extra-players.txt`.
+ - ✅ Every play checked against the bases before you confirm it (Enter confirms, Esc rejects)
+ - ❓ When the words leave a play open (did the runner score? double play or fielder's
+   choice?), the app asks instead of guessing, and you can answer by voice
+-- 📊 Live scoreboard and line score (runs by inning, R / H / E) with your team names
++- 📊 Live scoreboard and line score (runs by inning, R / H / E / LOB) with your team names
++- 🧾 Every kind of play a scorer needs: line outs and pop outs apart from fly outs,
++  sacrifice bunts (a plate appearance, not an at bat), and caught stealing and pickoffs
++  (an out that isn't the batter's, so he stays up). "L7", "P4", "CS 2-6" and "picked
++  off" are scored as shorthand when there's only one runner it could be
++- 🏁 The game ends itself: after the top of the last inning if the home team leads,
++  after any later half-inning with a leader, or on a walk-off, where only the winning
++  run counts unless it was a home run. Nine innings, or seven for the second game of a
++  doubleheader; a finished game takes no new plays
+ - 🎯 Spray chart placed by direction and how the ball was hit; filled dots are hits,
+   hollow are outs, and it filters by team
+ - 📋 Lineups for both teams: the batter due up and the pitcher are filled in on every play,
+   shorthand included, and a batter out of turn or missing from the lineup is flagged.
+   Pinch hitters and pitching changes keep each slot's history
+-- ⚾ Pitching lines (IP, BF, H, R, BB, K, HR) with a tap-to-count pitch counter. A run is
+-  charged to the pitcher who put that runner on base, even after a pitching change
+-- ↩️ Undo the last confirmed play
++- ⚾ Pitching lines (IP, BF, H, R, ER, BB, K, HR) with a tap-to-count pitch counter. A run is
++  charged to the pitcher who put that runner on base, even after a pitching change.
++  Earned runs leave out runners who reached on an error, runs that score on an error or
++  a passed ball, and every run after errors cost the defense its third out. Errors made
++  on some other play (a single plus a throwing error) aren't logged, so an official
++  scorer may differ
++- ↩️ Undo the last confirmed play, or edit or remove any earlier one. Say or type the
++  play again and the whole game is played back from there, so the score, outs, bases
++  and innings after it follow. Later plays that no longer fit (a runner moved off a
++  base that's now empty) are listed with a Fix button rather than rewritten
+ - 💾 The game in progress survives a page refresh (Reset starts a new one)
+ - 📄 Export a PDF game report: line score, spray charts for both teams, batting lines
+   and the full play-by-play
+-- 📑 Export CSVs of the play-by-play and the batting stats for Excel or Google Sheets
++- 📑 Export CSVs of the play-by-play, batting and pitching stats for Excel or Google Sheets
+ 
+ ## Database (Supabase)
+ 
+diff --git a/server/phrasings.js b/server/phrasings.js
+index f9810e7..531c40e 100644
+--- a/server/phrasings.js
++++ b/server/phrasings.js
+@@ -35,9 +35,8 @@ const FIELD_ZONES = {
+   9: "infield / catcher area",
+ };
+ 
+-// Actions the parser is allowed to emit. Caught stealing, pickoffs and
+-// sacrifice bunts have no action of their own yet - a sac bunt is recorded as
+-// a ground out with hit_type "bunt".
++// Actions the parser is allowed to emit. src/lib/normalizePlay.ts keeps the
++// same list for the browser.
+ const ACTIONS = [
+   "single",
+   "double",
+@@ -46,15 +45,20 @@ const ACTIONS = [
+   "strikeout",
+   "walk",
+   "fly out",
++  "line out",
++  "pop out",
+   "ground out",
+   "hit by pitch",
+   "error",
+   "fielder's choice",
+   "stolen base",
++  "caught stealing",
++  "pickoff",
+   "wild pitch",
+   "passed ball",
+   "balk",
+   "sacrifice fly",
++  "sacrifice bunt",
+ ];
+ 
+ // The first FEWSHOT_EXAMPLES of these go into the prompt, so the ones that
+@@ -284,7 +288,7 @@ const EXAMPLES = [
+   {
+     transcript: "L7",
+     play: {
+-      action: "fly out",
++      action: "line out",
+       description: "Line drive to left field, caught by the left fielder",
+       runners: [{ from: "home", to: "out", runner: null }],
+       rbi: 0,
+@@ -300,7 +304,7 @@ const EXAMPLES = [
+   {
+     transcript: "P4",
+     play: {
+-      action: "fly out",
++      action: "pop out",
+       description: "Pop up to the second baseman",
+       runners: [{ from: "home", to: "out", runner: null }],
+       rbi: 0,
+@@ -417,6 +421,49 @@ const EXAMPLES = [
+       confidence: "high",
+     },
+   },
++  {
++    transcript: "Soto caught stealing second, two six",
++    play: {
++      action: "caught stealing",
++      description: "Soto caught stealing second, catcher to shortstop",
++      runners: [{ from: "1st", to: "out", runner: "Soto" }],
++      rbi: 0,
++      outs_recorded: 1,
++      fielders_involved: ["2", "6"],
++      confidence: "high",
++    },
++  },
++  {
++    transcript: "pitcher picks him off first",
++    play: {
++      action: "pickoff",
++      description: "Runner picked off first, pitcher to first baseman",
++      runners: [{ from: "1st", to: "out", runner: null }],
++      rbi: 0,
++      outs_recorded: 1,
++      fielders_involved: ["1", "3"],
++      confidence: "high",
++    },
++  },
++  {
++    transcript: "sac bunt, runner moves to second, one three",
++    play: {
++      action: "sacrifice bunt",
++      description: "Sacrifice bunt, pitcher to first, runner to second",
++      runners: [
++        { from: "1st", to: "2nd", runner: null },
++        { from: "home", to: "out", runner: null },
++      ],
++      rbi: 0,
++      outs_recorded: 1,
++      fielders_involved: ["1", "3"],
++      hit_location: "pitcher",
++      hit_type: "bunt",
++      hit_hardness: "soft",
++      field_zone: 9,
++      confidence: "high",
++    },
++  },
+   {
+     transcript: "double off the wall in left center",
+     play: {
+@@ -437,7 +484,7 @@ const EXAMPLES = [
+ 
+ // Runs scored on these do not credit the batter with an RBI, so an example can
+ // legitimately show a runner reaching home with rbi 0.
+-const NO_RBI_ACTIONS = ["passed ball", "wild pitch", "balk", "error", "stolen base"];
++const NO_RBI_ACTIONS = ["passed ball", "wild pitch", "balk", "error", "stolen base", "caught stealing", "pickoff"];
+ 
+ // drops null/undefined at every level so the prompt does not pay tokens for
+ // empty fields, including inside the runners array
+@@ -458,8 +505,9 @@ function compact(value) {
+ const SLANG = [
+   "walk: BB, ball four, free pass. hit by pitch: HBP, plunked, drilled. strikeout: K, punched out; looking: backwards K, rung up",
+   "home run: HR, homer, dinger, jack, bomb, goes yard; solo shot = nobody on; grand slam = bases loaded, 4 rbi",
+-  "SF = sacrifice fly. sac bunt = ground out, hit_type bunt. FC, SB, WP, PB, BK = fielder's choice, stolen base, wild pitch, passed ball, balk. 1B/2B/3B as a play = single/double/triple",
+-  "double play (DP, turned two, twin killing) = 2 outs, action ground out, or fly out if caught in the air",
++  "SF = sacrifice fly. SH, sac bunt, sacrifice = sacrifice bunt (batter out, runners move up). FC, SB, CS, WP, PB, BK = fielder's choice, stolen base, caught stealing, wild pitch, passed ball, balk. PO, picked off = pickoff. 1B/2B/3B as a play = single/double/triple",
++  "lined out, liner caught = line out. popped up, pop fly caught, infield fly = pop out. fly out = fly ball caught",
++  "double play (DP, turned two, twin killing) = 2 outs, action ground out, or line out / fly out if caught in the air",
+   "line drive: liner, frozen rope, laser. fly ball: can of corn, blooper, Texas Leaguer. ground ball: chopper, dribbler, nubber, roller, worm burner",
+ ];
+ 
+diff --git a/server/phrasings.test.js b/server/phrasings.test.js
+index 5d375c8..4174135 100644
+--- a/server/phrasings.test.js
++++ b/server/phrasings.test.js
+@@ -44,7 +44,7 @@ test("field_zone values are real spray chart zones", () => {
+ });
+ 
+ test("plays with a ball in play carry a zone, plays without one do not", () => {
+-  const noBallInPlay = ["walk", "hit by pitch", "strikeout", "stolen base", "wild pitch", "passed ball", "balk"];
++  const noBallInPlay = ["walk", "hit by pitch", "strikeout", "stolen base", "caught stealing", "pickoff", "wild pitch", "passed ball", "balk"];
+   for (const { transcript, play } of EXAMPLES) {
+     const hasZone = play.field_zone !== undefined && play.field_zone !== null;
+     if (noBallInPlay.includes(play.action)) {
+diff --git a/src/components/LineScore.tsx b/src/components/LineScore.tsx
+index 8d73f3b..d0661b2 100644
+--- a/src/components/LineScore.tsx
++++ b/src/components/LineScore.tsx
+@@ -5,34 +5,39 @@ interface LineScoreProps {
+   log: LoggedPlay[];
+   state: GameState;
+   teamNames: Record<Team, string>;
++  // scheduled innings, so a seven-inning game shows seven columns
++  innings?: number;
+ }
+ 
+-export function LineScore({ log, state, teamNames }: LineScoreProps) {
+-  const score = lineScore(log, state);
++export function LineScore({ log, state, teamNames, innings: scheduled }: LineScoreProps) {
++  const score = lineScore(log, state, scheduled);
+   const innings = Array.from({ length: score.innings }, (_, i) => i + 1);
+   const batting: Team = state.half === "top" ? "away" : "home";
++  // the home half of the last inning, when the home team was already ahead
++  const skipped = (team: Team, i: number) => !!state.final && team === "home" && i + 1 === state.inning && state.half === "top";
+ 
+   const row = (team: Team) => {
+     const line = score[team];
+     return (
+       <tr key={team} className="border-t">
+         <th scope="row" className="text-left font-semibold py-1.5 pr-3 max-w-[9rem] truncate">
+-          {batting === team && <span className="text-accent mr-1" aria-label="batting">●</span>}
++          {batting === team && !state.final && <span className="text-accent mr-1" aria-label="batting">●</span>}
+           {teamNames[team]}
+         </th>
+         {line.runsByInning.map((runs, i) => (
+           <td
+             key={i}
+             className={`text-center tabular-nums px-1.5 ${
+-              i + 1 === state.inning && batting === team ? "bg-accent/15 font-semibold" : ""
++              i + 1 === state.inning && batting === team && !state.final ? "bg-accent/15 font-semibold" : ""
+             } ${runs === null ? "text-muted-foreground/40" : ""}`}
+           >
+-            {runs ?? "–"}
++            {runs ?? (skipped(team, i) ? "X" : "–")}
+           </td>
+         ))}
+         <td className="text-center tabular-nums px-2 font-bold border-l">{line.runs}</td>
+         <td className="text-center tabular-nums px-2">{line.hits}</td>
+         <td className="text-center tabular-nums px-2">{line.errors}</td>
++        <td className="text-center tabular-nums px-2 text-muted-foreground">{line.lob}</td>
+       </tr>
+     );
+   };
+@@ -52,6 +57,7 @@ export function LineScore({ log, state, teamNames }: LineScoreProps) {
+             <th scope="col" className="font-semibold px-2 pb-1 border-l">R</th>
+             <th scope="col" className="font-medium px-2 pb-1">H</th>
+             <th scope="col" className="font-medium px-2 pb-1">E</th>
++            <th scope="col" className="font-medium px-2 pb-1" title="Left on base">LOB</th>
+           </tr>
+         </thead>
+         <tbody>
+diff --git a/src/components/LineupPanel.tsx b/src/components/LineupPanel.tsx
+index a71261c..23134ae 100644
+--- a/src/components/LineupPanel.tsx
++++ b/src/components/LineupPanel.tsx
+@@ -74,7 +74,7 @@ export function LineupPanel(props: LineupPanelProps) {
+                 <p className="font-semibold truncate">{pitcher}</p>
+                 <p className="text-xs text-muted-foreground tabular-nums">
+                   {line
+-                    ? `${inningsPitched(line.outs)} IP · ${line.h} H · ${line.r} R · ${line.bb} BB · ${line.k} K`
++                    ? `${inningsPitched(line.outs)} IP · ${line.h} H · ${line.r} R · ${line.er} ER · ${line.bb} BB · ${line.k} K`
+                     : "No batters faced yet"}
+                 </p>
+               </div>
+diff --git a/src/components/Scoreboard.tsx b/src/components/Scoreboard.tsx
+index 7c84741..07dd626 100644
+--- a/src/components/Scoreboard.tsx
++++ b/src/components/Scoreboard.tsx
+@@ -22,9 +22,15 @@ export function Scoreboard({ state, teamNames = { away: "Away", home: "Home" },
+         {/* Inning */}
+         <div className="text-center">
+           <span className="text-xs uppercase tracking-wider text-muted-foreground block">Inning</span>
+-          <span className="text-2xl font-bold text-foreground">
+-            {state.half === "top" ? "▲" : "▼"} {state.inning}
+-          </span>
++          {state.final ? (
++            <span className="text-2xl font-bold text-foreground">
++              Final{state.inning !== 9 ? <span className="text-base font-semibold">/{state.inning}</span> : null}
++            </span>
++          ) : (
++            <span className="text-2xl font-bold text-foreground">
++              {state.half === "top" ? "▲" : "▼"} {state.inning}
++            </span>
++          )}
+         </div>
+ 
+         {/* Diamond */}
+diff --git a/src/lib/boxScore.test.ts b/src/lib/boxScore.test.ts
+index d123d43..9f852d9 100644
+--- a/src/lib/boxScore.test.ts
++++ b/src/lib/boxScore.test.ts
+@@ -92,3 +92,39 @@ describe("lineScore and battingLines", () => {
+     expect(lineScore([], { ...INITIAL_GAME_STATE, inning: 11 }).innings).toBe(11);
+   });
+ });
++
++describe("left on base", () => {
++  const single = (batter: string, extra: Play["runners"] = []) =>
++    play({ action: "single", batter, runners: [...extra, { from: "home", to: "1st", runner: batter }] });
++
++  it("counts the runners stranded when the third out is made", () => {
++    const { log, state } = playGame([single("A"), single("B", [{ from: "1st", to: "2nd", runner: "A" }]), out("C"), out("D"), out("E")]);
++    expect(lineScore(log, state).away.lob).toBe(2);
++    expect(lineScore(log, state).home.lob).toBe(0);
++  });
++
++  it("counts the batter left on first when a runner is thrown out for the third out", () => {
++    const thrownOut = { ...single("D", [{ from: "1st", to: "out", runner: "C" }]), outs_recorded: 1 };
++    const { log, state } = playGame([out("A"), out("B"), single("C"), thrownOut]);
++    expect(state.half).toBe("bottom");
++    expect(lineScore(log, state).away.lob).toBe(1);
++  });
++
++  it("doesn't count runners in a half-inning still going", () => {
++    const { log, state } = playGame([single("A")]);
++    expect(lineScore(log, state).away.lob).toBe(0);
++  });
++
++  it("treats sacrifice bunts as plate appearances but not at bats", () => {
++    const { log } = playGame([
++      play({ action: "sacrifice bunt", batter: "A", runners: [{ from: "home", to: "out", runner: "A" }], outs_recorded: 1 }),
++    ]);
++    expect(battingLines(log)[0]).toMatchObject({ pa: 1, ab: 0 });
++  });
++
++  it("doesn't charge caught stealing or a pickoff to the batter", () => {
++    const state = { ...INITIAL_GAME_STATE, runners: { first: "A", second: null, third: null } };
++    const cs = play({ action: "caught stealing", batter: "B", runners: [{ from: "1st", to: "out", runner: "A" }], outs_recorded: 1 });
++    expect(battingLines([{ play: cs, before: state, after: applyPlayToState(state, cs) }])).toEqual([]);
++  });
++});
+diff --git a/src/lib/boxScore.ts b/src/lib/boxScore.ts
+index cc56eb2..9d4eb48 100644
+--- a/src/lib/boxScore.ts
++++ b/src/lib/boxScore.ts
+@@ -1,4 +1,4 @@
+-import type { GameState, Play } from "@/types/game";
++import { REGULATION_INNINGS, runnersAfter, type GameState, type Play } from "@/types/game";
+ 
+ // Builds the line score and batting lines from the confirmed plays. Each play
+ // is logged with the game state before and after it, so runs come from the
+@@ -22,6 +22,8 @@ export interface TeamLine {
+   runs: number;
+   hits: number;
+   errors: number;
++  // runners still on base when each of the team's half-innings ended
++  lob: number;
+ }
+ 
+ export interface LineScore {
+@@ -47,10 +49,12 @@ export interface BattingLine {
+ 
+ export const HIT_ACTIONS = new Set(["single", "double", "triple", "home run"]);
+ 
+-// these happen between pitches and aren't anyone's plate appearance
+-const NOT_A_PLATE_APPEARANCE = new Set(["stolen base", "wild pitch", "passed ball", "balk"]);
++// these happen between pitches and aren't anyone's plate appearance; a
++// runner caught stealing or picked off for the third out leaves the batter to
++// lead off the next inning
++const NOT_A_PLATE_APPEARANCE = new Set(["stolen base", "wild pitch", "passed ball", "balk", "caught stealing", "pickoff"]);
+ // a plate appearance that doesn't count as an at bat
+-const NOT_AN_AT_BAT = new Set(["walk", "hit by pitch", "sacrifice fly"]);
++const NOT_AN_AT_BAT = new Set(["walk", "hit by pitch", "sacrifice fly", "sacrifice bunt"]);
+ 
+ export const isPlateAppearance = (action: string) => !NOT_A_PLATE_APPEARANCE.has(action.toLowerCase());
+ 
+@@ -61,9 +65,9 @@ export const battingTeam = (half: GameState["half"]): Team => (half === "top" ?
+ export const teamOf = (play: Pick<Play, "half">): Team => (play.half === "bottom" ? "home" : "away");
+ const fieldingTeam = (half: GameState["half"]): Team => (half === "top" ? "home" : "away");
+ 
+-export function lineScore(log: LoggedPlay[], current: GameState): LineScore {
+-  const innings = Math.max(9, current.inning, ...log.map((e) => e.before.inning));
+-  const empty = (): TeamLine => ({ runsByInning: new Array(innings).fill(null), runs: 0, hits: 0, errors: 0 });
++export function lineScore(log: LoggedPlay[], current: GameState, scheduled: number = REGULATION_INNINGS): LineScore {
++  const innings = Math.max(scheduled, current.inning, ...log.map((e) => e.before.inning));
++  const empty = (): TeamLine => ({ runsByInning: new Array(innings).fill(null), runs: 0, hits: 0, errors: 0, lob: 0 });
+   const lines = { away: empty(), home: empty() };
+ 
+   // an inning counts as batted once its half has started
+@@ -74,6 +78,10 @@ export function lineScore(log: LoggedPlay[], current: GameState): LineScore {
+ 
+   for (const { play, before, after } of log) {
+     const team = battingTeam(before.half);
++    if (endsHalf(before, after)) {
++      const stranded = runnersAfter(before, play);
++      lines[team].lob += [stranded.first, stranded.second, stranded.third].filter(Boolean).length;
++    }
+     const runs = after.score[team] - before.score[team];
+     const index = before.inning - 1;
+     lines[team].runsByInning[index] = (lines[team].runsByInning[index] ?? 0) + runs;
+@@ -86,6 +94,10 @@ export function lineScore(log: LoggedPlay[], current: GameState): LineScore {
+   return { innings, ...lines };
+ }
+ 
++// the play that made the third out, or ended the game
++export const endsHalf = (before: GameState, after: GameState) =>
++  !!after.final || after.half !== before.half || after.inning !== before.inning;
++
+ export function battingLines(log: LoggedPlay[]): BattingLine[] {
+   const lines = new Map<string, BattingLine>();
+   const order: string[] = [];
+diff --git a/src/lib/clarify.test.ts b/src/lib/clarify.test.ts
+index 7bdbf2d..9fa5205 100644
+--- a/src/lib/clarify.test.ts
++++ b/src/lib/clarify.test.ts
+@@ -400,3 +400,67 @@ describe("describePlay", () => {
+     );
+   });
+ });
++
++describe("caught stealing, pickoffs, sacrifice bunts, line outs and pop outs", () => {
++  it("asks who was caught stealing when two runners could have been", () => {
++    const cs = play({ action: "caught stealing", batter: null, runners: [{ from: "1st", to: "out", runner: "Soto" }], outs_recorded: 1 });
++    const qs = openQuestions(cs, ctx(state({ first: "Soto", second: "Lindor" }), "caught stealing"));
++    expect(ids(qs)).toEqual(["runner-out"]);
++    expect(qs[0].prompt).toBe("Who was caught stealing?");
++    const lindor = option(qs[0], "2nd").play;
++    expect(lindor.runners).toEqual([{ from: "2nd", to: "out", runner: "Lindor" }]);
++    expect(lindor.outs_recorded).toBe(1);
++  });
++
++  it("doesn't ask when the runner is named or he's the only one on", () => {
++    const po = play({ action: "pickoff", runners: [{ from: "2nd", to: "out", runner: "Lindor" }], outs_recorded: 1 });
++    expect(openQuestions(po, ctx(state({ first: "Soto", second: "Lindor" }), "Lindor picked off second"))).toEqual([]);
++    expect(openQuestions(po, ctx(state({ second: "Lindor" }), "picked off"))).toEqual([]);
++  });
++
++  it("never asks who batted on a caught stealing", () => {
++    const cs = play({ action: "caught stealing", batter: null, runners: [{ from: "1st", to: "out", runner: "Soto" }], outs_recorded: 1 });
++    expect(openQuestions(cs, ctx(state({ first: "Soto" }), "CS")).map((q) => q.id)).not.toContain("batter");
++  });
++
++  it("takes a forced runner moving up a base on a sacrifice bunt as given", () => {
++    const sac = play({
++      action: "sacrifice bunt",
++      runners: [
++        { from: "1st", to: "2nd", runner: "Soto" },
++        { from: "home", to: "out", runner: "Batter" },
++      ],
++      outs_recorded: 1,
++      hit_location: "pitcher",
++    });
++    expect(openQuestions(sac, ctx(state({ first: "Soto" }), "sac bunt"))).toEqual([]);
++  });
++
++  it("asks about a runner who wasn't forced on a sacrifice bunt, without offering an out", () => {
++    const sac = play({ action: "sacrifice bunt", runners: [{ from: "home", to: "out", runner: "Batter" }], outs_recorded: 1, hit_location: "pitcher" });
++    const qs = openQuestions(sac, ctx(state({ second: "Lindor" }), "sac bunt"));
++    expect(ids(qs)).toEqual(["runner:2nd"]);
++    expect(qs[0].options.map((o) => o.id)).not.toContain("out");
++    expect(qs[0].options.find((o) => o.likely)?.label).toBe("Went to 3rd");
++  });
++
++  it("lets a pop out hold the runners without asking", () => {
++    const pop = play({ action: "pop out", runners: [{ from: "home", to: "out" }], outs_recorded: 1, hit_location: "left field" });
++    expect(openQuestions(pop, ctx(state({ third: "Rios" }), "popped up to left"))).toEqual([]);
++  });
++
++  it("asks about tagging up on a line out to the outfield", () => {
++    const liner = play({ action: "line out", runners: [{ from: "home", to: "out" }], outs_recorded: 1, fielders_involved: ["9"], hit_location: "right field" });
++    const qs = openQuestions(liner, ctx(state({ third: "Rios" }), "lined out to right"));
++    expect(ids(qs)).toEqual(["runner:3rd"]);
++    expect(option(qs[0], "home").play.action).toBe("sacrifice fly");
++  });
++
++  it("describes the new plays in plain words", () => {
++    const s = state({ first: "Soto" });
++    expect(describePlay(play({ action: "caught stealing", runners: [{ from: "1st", to: "out", runner: "Soto" }], outs_recorded: 1 }), s)).toBe(
++      "Caught stealing. Soto out."
++    );
++    expect(describePlay(play({ action: "line out", batter: "Kim", hit_location: "short" }), INITIAL_GAME_STATE)).toBe("Kim lines out to short.");
++  });
++});
+diff --git a/src/lib/clarify.ts b/src/lib/clarify.ts
+index d3c8b20..ec4c0b1 100644
+--- a/src/lib/clarify.ts
++++ b/src/lib/clarify.ts
+@@ -68,9 +68,11 @@ const SCORED_WORDS = ["scored", "scores", "score", "scoring", "came in", "came h
+ const STAYED_WORDS = ["stayed", "stay", "stays", "held", "holds", "hold", "stood", "didn't move", "did not move", "stayed put", "no advance"];
+ const OUT_WORDS = ["out", "thrown out", "tagged out", "doubled off", "picked off", "caught"];
+ 
+-const NO_RBI = new Set(["error", "wild pitch", "passed ball", "balk", "stolen base"]);
++const NO_RBI = new Set(["error", "wild pitch", "passed ball", "balk", "stolen base", "caught stealing", "pickoff"]);
++// a runner is put out between pitches; the batter's turn goes on
++const RUNNER_OUT = new Set(["caught stealing", "pickoff"]);
+ const BETWEEN_PITCHES = new Set(["stolen base", "wild pitch", "passed ball"]);
+-const NO_BALL_IN_PLAY = new Set(["strikeout", "walk", "hit by pitch", "stolen base", "wild pitch", "passed ball", "balk"]);
++const NO_BALL_IN_PLAY = new Set(["strikeout", "walk", "hit by pitch", "stolen base", "caught stealing", "pickoff", "wild pitch", "passed ball", "balk"]);
+ const BATTER_TO: Record<string, number> = {
+   single: 1,
+   error: 1,
+@@ -315,12 +317,12 @@ const LIKELY: Record<string, Partial<Record<Base, number>>> = {
+   double: { "1st": 3, "2nd": 4, "3rd": 4 },
+ };
+ 
+-function fateQuestion(play: Play, state: GameState, r: OnBase, range: number[], likely?: number): Question | null {
++function fateQuestion(play: Play, state: GameState, r: OnBase, range: number[], likely?: number, canBeOut = true): Question | null {
+   // with only one place to go there is nothing to ask; a runner thrown out on
+   // a forced move would have been said
+   if (range.length < 2) return null;
+   const options = range.map((k) => fateOption(play, state, r, k, { likely: k === likely }));
+-  options.push(fateOption(play, state, r, OUT));
++  if (canBeOut) options.push(fateOption(play, state, r, OUT));
+   return {
+     id: `runner:${r.base}`,
+     prompt: `Where did ${who(r)} end up? ${r.name ? `He was on ${r.base}.` : ""}`.trim(),
+@@ -462,6 +464,31 @@ function advanceQuestion(play: Play, state: GameState, on: OnBase[], action: str
+   };
+ }
+ 
++// caught stealing or picked off with more than one runner on: which one
++function runnerOutQuestion(play: Play, state: GameState, on: OnBase[], action: string): Question {
++  const stealing = action === "caught stealing";
++  return {
++    id: "runner-out",
++    prompt: stealing ? "Who was caught stealing?" : "Who was picked off?",
++    situation: describeSituation(state),
++    required: true,
++    options: on.map((r) => {
++      const next = BASE_AT[r.rank + 1] ?? "home";
++      // only the runner put out moved; anyone else the parser moved stays put
++      const only: Play = { ...play, runners: [] };
++      return {
++        id: r.base,
++        label: stealing ? `${whoCap(r)}, trying for ${next}` : `${whoCap(r)}, off ${r.base}`,
++        play: recount(setRunner(only, state, r.base, "out")),
++        resolves: [`runner:${r.base}`],
++        match: {
++          groups: [[...(r.name ? [surname(r.name)] : []), ...BASE_WORDS[r.base], ...(stealing ? (next === "home" ? ["home", "plate"] : BASE_WORDS[next as Base]) : [])]],
++        },
++      };
++    }),
++  };
++}
++
+ function errorFielderQuestion(play: Play, state: GameState): Question {
+   return {
+     id: "error-fielder",
+@@ -540,6 +567,12 @@ function runnerQuestions(play: Play, ctx: ClarifyContext, said: string, done: Se
+   const settled = (r: OnBase) => done.has(`runner:${r.base}`) || mentions(said, r);
+   const unsettled = (r: OnBase) => !settled(r);
+ 
++  if (RUNNER_OUT.has(action)) {
++    // with one runner on there's no doubt who it was
++    if (on.length < 2 || done.has("runner-out") || on.some((r) => mentions(said, r))) return [];
++    return [runnerOutQuestion(play, state, on, action)];
++  }
++
+   if (BETWEEN_PITCHES.has(action)) {
+     // naming any runner says who moved; the parse already has him
+     if (on.length < 2 || done.has("advance") || on.some((r) => mentions(said, r))) return [];
+@@ -577,7 +610,27 @@ function runnerQuestions(play: Play, ctx: ClarifyContext, said: string, done: Se
+     return questions;
+   }
+ 
+-  if (action === "fly out" || action === "sacrifice fly") {
++  if (action === "sacrifice bunt") {
++    // the batter gave himself up to move the runners: anyone forced moved up
++    // a base (had one been put out it would be a fielder's choice), so only
++    // a runner who went further, or one who wasn't forced, is asked about
++    const occupied = (rank: number) => on.some((r) => r.rank === rank);
++    for (const r of on) {
++      if (!unsettled(r)) continue;
++      let forced = true;
++      for (let k = 1; k < r.rank; k++) if (!occupied(k)) forced = false;
++      if (forced && destRank(play, r) === r.rank + 1) continue;
++      const range = legalRange(play, r, on, forced ? r.rank + 1 : r.rank, settled);
++      const q = fateQuestion(play, state, r, range, r.rank + 1, false);
++      if (q) questions.push(q);
++    }
++    return questions;
++  }
++
++  // a pop up holds the runners
++  if (action === "pop out") return [];
++
++  if (action === "fly out" || action === "line out" || action === "sacrifice fly") {
+     // a pop up or a catch in the infield holds the runners
+     const fielders = play.fielders_involved.map(Number).filter(Boolean);
+     const infield = (play.hit_type ?? "").toLowerCase() === "pop up" || (fielders.length > 0 && fielders.every((f) => f <= 6));
+@@ -707,12 +760,17 @@ const VERB: Record<string, string> = {
+   strikeout: "strikes out",
+   "ground out": "grounds out",
+   "fly out": "flies out",
++  "line out": "lines out",
++  "pop out": "pops out",
++  "sacrifice bunt": "lays down a sacrifice bunt",
+   "sacrifice fly": "hits a sacrifice fly",
+   error: "reaches on an error",
+   "fielder's choice": "reaches on a fielder's choice",
+ };
+ const EVENT: Record<string, string> = {
+   "stolen base": "Stolen base",
++  "caught stealing": "Caught stealing",
++  pickoff: "Pickoff",
+   "wild pitch": "Wild pitch",
+   "passed ball": "Passed ball",
+   balk: "Balk",
+diff --git a/src/lib/exportCsv.test.ts b/src/lib/exportCsv.test.ts
+index 44134d3..26e69db 100644
+--- a/src/lib/exportCsv.test.ts
++++ b/src/lib/exportCsv.test.ts
+@@ -58,11 +58,11 @@ describe("pitching csv", () => {
+     };
+     const pitched = [{ play: k, before: INITIAL_GAME_STATE, after: applyPlayToState(INITIAL_GAME_STATE, k) }];
+     const csv = pitchingCsv(pitched, { ...info, pitchCounts: { "home:clay holmes": 6 } }).split("\r\n");
+-    expect(csv[0]).toBe("Team,Pitcher,IP,BF,H,R,BB,HBP,K,HR,Pitches");
+-    expect(csv[1]).toBe("York Revolution,Clay Holmes,0.1,1,0,0,0,0,1,0,6");
++    expect(csv[0]).toBe("Team,Pitcher,IP,BF,H,R,ER,BB,HBP,K,HR,Pitches");
++    expect(csv[1]).toBe("York Revolution,Clay Holmes,0.1,1,0,0,0,0,0,1,0,6");
+   });
+ 
+   it("leaves pitches blank when nobody counted them", () => {
+-    expect(pitchingCsv(log, info).split("\r\n")[1]).toBe("York Revolution,Unnamed pitcher,0.0,1,1,0,0,0,0,0,");
++    expect(pitchingCsv(log, info).split("\r\n")[1]).toBe("York Revolution,Unnamed pitcher,0.0,1,1,0,0,0,0,0,0,");
+   });
+ });
+diff --git a/src/lib/exportCsv.ts b/src/lib/exportCsv.ts
+index bb6fab3..ed01d50 100644
+--- a/src/lib/exportCsv.ts
++++ b/src/lib/exportCsv.ts
+@@ -8,6 +8,8 @@ export interface GameInfo {
+   date: Date;
+   // tap-counted pitches, keyed by pitcherKey
+   pitchCounts?: Record<string, number>;
++  // scheduled innings, when not nine
++  innings?: number;
+ }
+ 
+ function cell(value: unknown): string {
+@@ -74,9 +76,9 @@ export function battingCsv(log: LoggedPlay[], info: GameInfo): string {
+ }
+ 
+ export function pitchingCsv(log: LoggedPlay[], info: GameInfo): string {
+-  const header = ["Team", "Pitcher", "IP", "BF", "H", "R", "BB", "HBP", "K", "HR", "Pitches"];
++  const header = ["Team", "Pitcher", "IP", "BF", "H", "R", "ER", "BB", "HBP", "K", "HR", "Pitches"];
+   const rows = pitchingLines(log, info.pitchCounts).map((p) => [
+-    info.teamNames[p.team], p.name, inningsPitched(p.outs), p.bf, p.h, p.r, p.bb, p.hbp, p.k, p.hr, p.pitches,
++    info.teamNames[p.team], p.name, inningsPitched(p.outs), p.bf, p.h, p.r, p.er, p.bb, p.hbp, p.k, p.hr, p.pitches,
+   ]);
+   return toCsv([header, ...rows]);
+ }
+diff --git a/src/lib/exportPdf.ts b/src/lib/exportPdf.ts
+index 7f5bd57..d58a6ec 100644
+--- a/src/lib/exportPdf.ts
++++ b/src/lib/exportPdf.ts
+@@ -103,7 +103,7 @@ export function exportPdf(log: LoggedPlay[], state: GameState, info: GameInfo) {
+   const doc: Doc = new jsPDF({ unit: "pt", format: "letter" });
+   const pageWidth = doc.internal.pageSize.getWidth();
+   const { away, home } = info.teamNames;
+-  const score = lineScore(log, state);
++  const score = lineScore(log, state, info.innings);
+ 
+   // header
+   doc.setFillColor(...NAVY).rect(0, 0, pageWidth, 64, "F");
+@@ -111,7 +111,7 @@ export function exportPdf(log: LoggedPlay[], state: GameState, info: GameInfo) {
+   doc.text(`${away} ${score.away.runs}, ${home} ${score.home.runs}`, MARGIN, 30);
+   doc.setFont("helvetica", "normal").setFontSize(10);
+   doc.text(
+-    `${info.date.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" })}  ·  ${log.length} plays  ·  through ${half(state)}`,
++    `${info.date.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" })}  ·  ${log.length} plays  ·  ${state.final ? "final" : `through ${half(state)}`}`,
+     MARGIN,
+     48
+   );
+@@ -121,14 +121,17 @@ export function exportPdf(log: LoggedPlay[], state: GameState, info: GameInfo) {
+   const inningCols = Array.from({ length: score.innings }, (_, i) => String(i + 1));
+   const lineRow = (name: string, line: typeof score.away) => [
+     name,
+-    ...line.runsByInning.map((r) => (r === null ? "" : String(r))),
++    ...line.runsByInning.map((r, i) =>
++      r === null ? (state.final && line === score.home && state.half === "top" && i + 1 === state.inning ? "X" : "") : String(r)
++    ),
+     String(line.runs),
+     String(line.hits),
+     String(line.errors),
++    String(line.lob),
+   ];
+   autoTable(doc, {
+     startY: 84,
+-    head: [["", ...inningCols, "R", "H", "E"]],
++    head: [["", ...inningCols, "R", "H", "E", "LOB"]],
+     body: [lineRow(away, score.away), lineRow(home, score.home)],
+     theme: "grid",
+     styles: { fontSize: 10, halign: "center", cellPadding: 4 },
+@@ -192,10 +195,10 @@ export function exportPdf(log: LoggedPlay[], state: GameState, info: GameInfo) {
+     const rows = pitching.filter((p) => p.team === team);
+     autoTable(doc, {
+       startY: y,
+-      head: [[`${info.teamNames[team]} pitching`, "IP", "BF", "H", "R", "BB", "HBP", "K", "HR", "Pitches"]],
++      head: [[`${info.teamNames[team]} pitching`, "IP", "BF", "H", "R", "ER", "BB", "HBP", "K", "HR", "Pitches"]],
+       body: rows.length
+-        ? rows.map((p) => [p.name, inningsPitched(p.outs), p.bf, p.h, p.r, p.bb, p.hbp, p.k, p.hr, p.pitches ?? ""])
+-        : [["No pitching recorded yet", "", "", "", "", "", "", "", "", ""]],
++        ? rows.map((p) => [p.name, inningsPitched(p.outs), p.bf, p.h, p.r, p.er, p.bb, p.hbp, p.k, p.hr, p.pitches ?? ""])
++        : [["No pitching recorded yet", "", "", "", "", "", "", "", "", "", ""]],
+       theme: "striped",
+       styles: { fontSize: 9, halign: "center", cellPadding: 3 },
+       headStyles: { fillColor: NAVY },
+@@ -204,10 +207,16 @@ export function exportPdf(log: LoggedPlay[], state: GameState, info: GameInfo) {
+     });
+     y = (doc.lastAutoTable?.finalY ?? y) + 14;
+   }
+-  // earned runs depend on the official scorer's call on errors, which the app
+-  // doesn't make, so say what R means rather than let it pass for ER
++  // earned runs need the official scorer's call on errors, which the app only
++  // approximates, so say how ER was worked out
+   doc.setFont("helvetica", "italic").setFontSize(8).setTextColor(110);
+-  doc.text("R is all runs allowed, charged to the pitcher who put each runner on base. Pitches are tap-counted.", MARGIN, y);
++  doc.text(
++    "R is charged to the pitcher who put each runner on base. ER leaves out runners who reached on an error, runs on errors and passed balls, and runs after errors cost a third out; the official scorer may differ. Pitches are tap-counted.",
++    MARGIN,
++    y,
++    { maxWidth: pageWidth - MARGIN * 2 }
++  );
++  y += 10;
+   y += 10;
+ 
+   // play-by-play
+diff --git a/src/lib/gameEnd.test.ts b/src/lib/gameEnd.test.ts
+new file mode 100644
+index 0000000..bbc63d0
+--- /dev/null
++++ b/src/lib/gameEnd.test.ts
+@@ -0,0 +1,129 @@
++import { describe, expect, it } from "vitest";
++import { INITIAL_GAME_STATE, applyPlayToState, type GameState, type Play } from "@/types/game";
++import { lineScore, type LoggedPlay } from "./boxScore";
++
++const play = (p: Partial<Play> & Pick<Play, "action">): Play => ({
++  description: p.action,
++  runners: [],
++  rbi: 0,
++  outs_recorded: 0,
++  fielders_involved: [],
++  confidence: "high",
++  ...p,
++});
++
++const out = play({ action: "ground out", runners: [{ from: "home", to: "out" }], outs_recorded: 1 });
++const at = (inning: number, half: "top" | "bottom", away: number, home: number, extra: Partial<GameState> = {}): GameState => ({
++  ...INITIAL_GAME_STATE,
++  inning,
++  half,
++  score: { away, home },
++  ...extra,
++});
++
++const threeOuts = (state: GameState, innings?: number) => {
++  let s = state;
++  for (let i = 0; i < 3; i++) s = applyPlayToState(s, out, innings);
++  return s;
++};
++
++describe("the end of the game", () => {
++  it("ends after the top of the ninth when the home team is ahead", () => {
++    const end = threeOuts(at(9, "top", 2, 3));
++    expect(end.final).toBe(true);
++    expect(end.half).toBe("top");
++    expect(end.inning).toBe(9);
++  });
++
++  it("plays the bottom of the ninth when the home team is behind or tied", () => {
++    for (const [away, home] of [[3, 2], [3, 3]]) {
++      const end = threeOuts(at(9, "top", away, home));
++      expect(end.final).toBeFalsy();
++      expect(end.half).toBe("bottom");
++    }
++  });
++
++  it("ends after the bottom of the ninth with the away team ahead", () => {
++    const end = threeOuts(at(9, "bottom", 4, 2));
++    expect(end.final).toBe(true);
++    expect(end.inning).toBe(9);
++  });
++
++  it("goes to extra innings when tied, and ends after a full extra inning with a leader", () => {
++    const tenth = threeOuts(at(9, "bottom", 2, 2));
++    expect(tenth.final).toBeFalsy();
++    expect(tenth.inning).toBe(10);
++    expect(tenth.half).toBe("top");
++    const awayScores = applyPlayToState(tenth, play({ action: "home run", runners: [{ from: "home", to: "home" }], rbi: 1 }));
++    const end = threeOuts(threeOuts(awayScores));
++    expect(end.final).toBe(true);
++    expect(end.score).toEqual({ away: 3, home: 2 });
++  });
++
++  it("never ends before the last scheduled inning", () => {
++    const end = threeOuts(at(8, "bottom", 0, 9));
++    expect(end.final).toBeFalsy();
++    expect(end.inning).toBe(9);
++  });
++
++  it("ends a seven-inning game after seven", () => {
++    expect(threeOuts(at(7, "top", 0, 1), 7).final).toBe(true);
++    expect(threeOuts(at(7, "top", 0, 1)).final).toBeFalsy();
++  });
++
++  describe("walk-offs", () => {
++    const loaded = { runners: { first: "A", second: "B", third: "C" } };
++
++    it("ends the game the moment the home team goes ahead, counting only the winning run", () => {
++      const double = play({
++        action: "double",
++        batter: "D",
++        runners: [
++          { from: "3rd", to: "home", runner: "C" },
++          { from: "2nd", to: "home", runner: "B" },
++          { from: "1st", to: "home", runner: "A" },
++          { from: "home", to: "2nd", runner: "D" },
++        ],
++        rbi: 3,
++      });
++      const end = applyPlayToState(at(9, "bottom", 4, 4, { outs: 1, ...loaded }), double);
++      expect(end.final).toBe(true);
++      expect(end.score).toEqual({ away: 4, home: 5 });
++      expect(end.outs).toBe(1);
++    });
++
++    it("counts every run on a walk-off home run", () => {
++      const slam = play({ action: "home run", batter: "D", runners: [{ from: "home", to: "home", runner: "D" }], rbi: 4 });
++      const end = applyPlayToState(at(10, "bottom", 4, 4, loaded), slam);
++      expect(end.final).toBe(true);
++      expect(end.score.home).toBe(8);
++    });
++
++    it("doesn't end the game on a run that only ties it", () => {
++      const single = play({ action: "single", batter: "D", runners: [{ from: "3rd", to: "home", runner: "C" }, { from: "home", to: "1st" }], rbi: 1 });
++      const tied = applyPlayToState(at(9, "bottom", 4, 3, { runners: { first: null, second: null, third: "C" } }), single);
++      expect(tied.final).toBeFalsy();
++      expect(tied.score.home).toBe(4);
++    });
++  });
++});
++
++describe("the line score at the end", () => {
++  it("leaves the unplayed bottom of the ninth empty", () => {
++    let state = at(9, "top", 1, 2);
++    const log: LoggedPlay[] = [];
++    for (let i = 0; i < 3; i++) {
++      const after = applyPlayToState(state, out);
++      log.push({ play: out, before: state, after });
++      state = after;
++    }
++    const score = lineScore(log, state);
++    expect(score.innings).toBe(9);
++    expect(score.home.runsByInning[8]).toBeNull();
++    expect(score.away.runsByInning[8]).toBe(0);
++  });
++
++  it("shows seven columns for a seven-inning game", () => {
++    expect(lineScore([], INITIAL_GAME_STATE, 7).innings).toBe(7);
++  });
++});
+diff --git a/src/lib/lineup.test.ts b/src/lib/lineup.test.ts
+index 19b50ab..d2ccc27 100644
+--- a/src/lib/lineup.test.ts
++++ b/src/lib/lineup.test.ts
+@@ -291,3 +291,25 @@ describe("ordinal", () => {
+     expect(ordinal(n)).toBe(s);
+   });
+ });
++
++describe("scoring an earlier play again", () => {
++  it("keeps who was batting and pitching then, even after a substitution and a pitching change", () => {
++    let cards = lineups();
++    cards = { away: substitute(cards.away, 0, "Pinch Hitter"), home: changePitcher(cards.home, "Edwin Díaz") };
++    const redo = applyLineup(single(), INITIAL_GAME_STATE, cards, 0, TEAMS, { batter: "Juan Soto", pitcher: "Clay Holmes", slot: 0 });
++    expect(redo.play.batter).toBe("Juan Soto");
++    expect(redo.play.pitcher).toBe("Clay Holmes");
++    expect(redo.slot).toBe(0);
++    expect(redo.warnings).toEqual([]);
++  });
++
++  it("still takes a batter the scorer names instead", () => {
++    const redo = applyLineup(play({ ...single(), batter: "Lindor" }), INITIAL_GAME_STATE, lineups(), 0, TEAMS, {
++      batter: "Juan Soto",
++      pitcher: "Clay Holmes",
++      slot: 0,
++    });
++    expect(redo.play.batter).toBe("Francisco Lindor");
++    expect(redo.slot).toBe(1);
++  });
++});
+diff --git a/src/lib/lineup.ts b/src/lib/lineup.ts
+index 281f156..aee9052 100644
+--- a/src/lib/lineup.ts
++++ b/src/lib/lineup.ts
+@@ -159,7 +159,10 @@ export function applyLineup(
+   state: GameState,
+   lineups: Lineups,
+   dueUp: number,
+-  teamNames: Record<Team, string>
++  teamNames: Record<Team, string>,
++  // when an earlier play is scored again: who was batting and pitching then,
++  // since the lineups on screen may have changed since
++  history?: { batter?: string | null; pitcher?: string | null; slot?: number | null }
+ ): LineupCheck {
+   const batting = battingTeam(state.half);
+   const fielding = otherTeam(batting);
+@@ -167,7 +170,7 @@ export function applyLineup(
+   const next: Play = { ...play };
+   let slot: number | null = null;
+ 
+-  const pitcher = currentPitcher(lineups[fielding]);
++  const pitcher = history ? history.pitcher?.trim() || null : currentPitcher(lineups[fielding]);
+   if (pitcher) {
+     if (!next.pitcher?.trim() || samePlayer(next.pitcher, pitcher)) {
+       next.pitcher = pitcher;
+@@ -182,7 +185,10 @@ export function applyLineup(
+   if (hasBattingOrder(lineup) && isPlateAppearance(next.action)) {
+     const dueName = currentBatter(lineup, dueUp)!;
+     const named = next.batter?.trim();
+-    if (!named) {
++    if (!named && history?.batter?.trim()) {
++      next.batter = history.batter.trim();
++      slot = history.slot ?? dueUp;
++    } else if (!named) {
+       next.batter = dueName;
+       slot = dueUp;
+     } else {
+@@ -195,7 +201,8 @@ export function applyLineup(
+       } else {
+         next.batter = match.name;
+         slot = match.slot;
+-        if (!match.current) {
++        // a player since replaced was still in the game back then
++        if (!match.current && !history) {
+           warnings.push(`${match.name} was replaced by ${currentBatter(lineup, match.slot)} and is out of the game.`);
+         } else if (match.slot !== dueUp) {
+           warnings.push(
+diff --git a/src/lib/normalizePlay.test.ts b/src/lib/normalizePlay.test.ts
+index a494c61..668d1d8 100644
+--- a/src/lib/normalizePlay.test.ts
++++ b/src/lib/normalizePlay.test.ts
+@@ -171,16 +171,23 @@ describe("normalizePlay rejection and fallback", () => {
+ describe("individual normalizers", () => {
+   it.each([
+     ["groundout", null, "ground out"],
+-    ["Line Out", null, "fly out"],
++    ["Line Out", null, "line out"],
+     ["Fielders-Choice", null, "fielder's choice"],
+     ["HBP", null, "hit by pitch"],
+-    ["triple play", "line drive", "fly out"],
++    ["triple play", "line drive", "line out"],
+     ["double play", "ground ball", "ground out"],
+     // seen from the live edge function
+     ["ground into double play", "ground ball", "ground out"],
+     ["Grounded into a double play", null, "ground out"],
+-    ["lined into a triple play", "line drive", "fly out"],
++    ["lined into a triple play", "line drive", "line out"],
+     ["GIDP", null, "ground out"],
++    ["picked off", null, "pickoff"],
++    ["CS", null, "caught stealing"],
++    ["sac bunt", null, "sacrifice bunt"],
++    ["popped up", null, "pop out"],
++    ["fly out", "line drive", "line out"],
++    ["fly out", "pop up", "pop out"],
++    ["fly out", "fly ball", "fly out"],
+     ["something new", null, "something new"],
+   ])("action %s (%s) -> %s", (raw, hitType, expected) => {
+     expect(normalizeAction(raw, hitType)).toBe(expected);
+diff --git a/src/lib/normalizePlay.ts b/src/lib/normalizePlay.ts
+index 0bea07f..c5e46ed 100644
+--- a/src/lib/normalizePlay.ts
++++ b/src/lib/normalizePlay.ts
+@@ -13,12 +13,15 @@ const NO_BALL_IN_PLAY = new Set([
+   "walk",
+   "hit by pitch",
+   "stolen base",
++  "caught stealing",
++  "pickoff",
+   "wild pitch",
+   "passed ball",
+   "balk",
+ ]);
+ 
+-const CANONICAL_ACTIONS = [
++// the same list as ACTIONS in server/phrasings.js
++export const CANONICAL_ACTIONS = [
+   "single",
+   "double",
+   "triple",
+@@ -26,15 +29,20 @@ const CANONICAL_ACTIONS = [
+   "strikeout",
+   "walk",
+   "fly out",
++  "line out",
++  "pop out",
+   "ground out",
+   "hit by pitch",
+   "error",
+   "fielder's choice",
+   "stolen base",
++  "caught stealing",
++  "pickoff",
+   "wild pitch",
+   "passed ball",
+   "balk",
+   "sacrifice fly",
++  "sacrifice bunt",
+ ];
+ 
+ // lowercased, apostrophes dropped, hyphens and underscores read as spaces, so
+@@ -54,14 +62,16 @@ const ACTION_ALIASES: Record<string, string> = {
+   "grounder": "ground out",
+   "flyout": "fly out",
+   "fly ball out": "fly out",
+-  "lineout": "fly out",
+-  "line out": "fly out",
+-  "line drive out": "fly out",
+-  "popout": "fly out",
+-  "pop out": "fly out",
+-  "popup": "fly out",
+-  "pop up": "fly out",
+-  "pop fly": "fly out",
++  "lineout": "line out",
++  "lined out": "line out",
++  "line drive out": "line out",
++  "popout": "pop out",
++  "popped out": "pop out",
++  "popup": "pop out",
++  "pop up": "pop out",
++  "popped up": "pop out",
++  "pop fly": "pop out",
++  "infield fly": "pop out",
+   "foul out": "fly out",
+   "foulout": "fly out",
+   "strike out": "strikeout",
+@@ -85,6 +95,17 @@ const ACTION_ALIASES: Record<string, string> = {
+   "fielder choice": "fielder's choice",
+   "steal": "stolen base",
+   "sb": "stolen base",
++  "cs": "caught stealing",
++  "caught steal": "caught stealing",
++  "thrown out stealing": "caught stealing",
++  "pick off": "pickoff",
++  "picked off": "pickoff",
++  "po": "pickoff",
++  "sac bunt": "sacrifice bunt",
++  "sacrifice": "sacrifice bunt",
++  "sacrifice hit": "sacrifice bunt",
++  "sac hit": "sacrifice bunt",
++  "sh": "sacrifice bunt",
+   "wp": "wild pitch",
+   "pb": "passed ball",
+   "reached on error": "error",
+@@ -94,16 +115,22 @@ const ACTION_ALIASES: Record<string, string> = {
+ };
+ 
+ const AIRBORNE = new Set(["fly ball", "line drive", "pop up"]);
++const CAUGHT: Record<string, string> = { "fly ball": "fly out", "line drive": "line out", "pop up": "pop out" };
+ 
+ export function normalizeAction(raw: string, hitType?: string | null): string {
+   const key = actionKey(raw);
+   // a double or triple play is an out on the batter; which kind depends on how
+   // the ball was hit. matched anywhere in the phrase, since the model words it
+   // as "ground into double play", "lined into a triple play" and so on
++  const type = hitType?.toLowerCase() ?? "";
+   if (/\b(double|triple) play\b|^(dp|tp|gidp)$/.test(key)) {
+-    return hitType && AIRBORNE.has(hitType.toLowerCase()) ? "fly out" : "ground out";
++    return AIRBORNE.has(type) ? CAUGHT[type] : "ground out";
+   }
+-  return ACTION_ALIASES[key] ?? key;
++  const action = ACTION_ALIASES[key] ?? key;
++  // a caught liner or pop up is its own kind of out, whatever the parser
++  // called it
++  if (action === "fly out" && AIRBORNE.has(type)) return CAUGHT[type];
++  return action;
+ }
+ 
+ export function normalizeBase(raw: string): string {
+diff --git a/src/lib/persistence.ts b/src/lib/persistence.ts
+index 973628b..b0f371e 100644
+--- a/src/lib/persistence.ts
++++ b/src/lib/persistence.ts
+@@ -65,3 +65,21 @@ export async function deletePlay(gameId: string, playIndex: number): Promise<Sav
+     return failure(e);
+   }
+ }
++
++// rewrites the saved plays from one point on, after a play there was changed
++// or removed. delete and insert rather than update, which the site's database
++// role isn't allowed to do
++export async function replacePlaysFrom(gameId: string, fromIndex: number, plays: Play[]): Promise<SaveResult<null>> {
++  try {
++    const removed = await supabase.from("plays").delete().eq("game_id", gameId).gte("play_index", fromIndex);
++    if (removed.error) return failure(removed.error.message);
++    if (!plays.length) return { ok: true, data: null };
++    const { error } = await supabase.from("plays").insert(
++      plays.map((play, i) => ({ game_id: gameId, play_index: fromIndex + i, data: play as unknown as Json }))
++    );
++    if (error) return failure(error.message);
++    return { ok: true, data: null };
++  } catch (e) {
++    return failure(e);
++  }
++}
+diff --git a/src/lib/pitching.test.ts b/src/lib/pitching.test.ts
+index 0fcf218..dfb7532 100644
+--- a/src/lib/pitching.test.ts
++++ b/src/lib/pitching.test.ts
+@@ -185,3 +185,46 @@ describe("pitchingLines", () => {
+     expect(pitchingLines([])).toEqual([]);
+   });
+ });
++
++describe("earned runs", () => {
++  const holmes = by("Clay Holmes");
++  const reachedOnError = (batter: string) =>
++    play({ action: "error", batter, pitcher: "Clay Holmes", fielders_involved: ["6"], runners: [{ from: "home", to: "1st", runner: batter }] });
++
++  it("counts a run driven in by hits as earned", () => {
++    const log = playGame([holmes.single("A"), holmes.homer("B", [{ from: "1st", to: "home", runner: "A" }])]);
++    expect(pitchingLines(log)[0]).toMatchObject({ r: 2, er: 2 });
++  });
++
++  it("never counts the run of a runner who reached on an error", () => {
++    const log = playGame([reachedOnError("A"), holmes.homer("B", [{ from: "1st", to: "home", runner: "A" }])]);
++    expect(pitchingLines(log)[0]).toMatchObject({ r: 2, er: 1 });
++  });
++
++  it("doesn't count a run that scores on a passed ball", () => {
++    const log = playGame([
++      holmes.single("A"),
++      play({ action: "stolen base", pitcher: "Clay Holmes", runners: [{ from: "1st", to: "2nd", runner: "A" }] }),
++      play({ action: "wild pitch", pitcher: "Clay Holmes", runners: [{ from: "2nd", to: "3rd", runner: "A" }] }),
++      play({ action: "passed ball", pitcher: "Clay Holmes", runners: [{ from: "3rd", to: "home", runner: "A" }] }),
++    ]);
++    expect(pitchingLines(log)[0]).toMatchObject({ r: 1, er: 0 });
++  });
++
++  it("treats every run after an error would have ended the inning as unearned", () => {
++    // two outs, then an error that should have been the third
++    const log = playGame([
++      holmes.out("A"),
++      holmes.out("B"),
++      reachedOnError("C"),
++      holmes.homer("D", [{ from: "1st", to: "home", runner: "C" }]),
++    ]);
++    expect(pitchingLines(log)[0]).toMatchObject({ r: 2, er: 0 });
++  });
++
++  it("starts each inning clean", () => {
++    const log = playGame([holmes.out("A"), holmes.out("B"), reachedOnError("C"), holmes.out("D"), holmes.homer("E")]);
++    // the home run comes in the bottom half against the other team's pitcher
++    expect(pitchingLines(log).find((l) => l.team === "away")).toMatchObject({ r: 1, er: 1 });
++  });
++});
+diff --git a/src/lib/pitching.ts b/src/lib/pitching.ts
+index 0e59c11..af55dab 100644
+--- a/src/lib/pitching.ts
++++ b/src/lib/pitching.ts
+@@ -6,8 +6,17 @@ import { HIT_ACTIONS, battingTeam, isPlateAppearance, type LoggedPlay, type Team
+ //
+ // Runs follow the inherited-runner rule: a run belongs to the pitcher who put
+ // that runner on base, even if he has been relieved by the time the runner
+-// scores. Earned runs need an official scorer's judgment on errors, so R here
+-// is all runs.
++// scores.
++//
++// Earned runs follow the parts of rule 9.16 the log can see, and an official
++// scorer's judgment can still differ:
++// - a runner who reached on an error never scores an earned run
++// - a run that scores on an error or a passed ball is unearned
++// - each error that let the batter reach counts as the out it should have
++//   been, and once those and the real outs make three, every later run in the
++//   inning is unearned
++// Errors made on some other play (a single plus a throwing error, say) aren't
++// logged as errors, so they can't be taken out.
+ 
+ export interface PitchingLine {
+   name: string;
+@@ -16,6 +25,8 @@ export interface PitchingLine {
+   bf: number;
+   h: number;
+   r: number;
++  // earned runs, as far as the log can tell (see above)
++  er: number;
+   bb: number;
+   hbp: number;
+   k: number;
+@@ -40,7 +51,7 @@ export function pitchingLines(log: LoggedPlay[], pitchCounts: Record<string, num
+   const lineFor = (team: Team, name: string) => {
+     const key = pitcherKey(team, name);
+     if (!lines.has(key)) {
+-      lines.set(key, { name, team, outs: 0, bf: 0, h: 0, r: 0, bb: 0, hbp: 0, k: 0, hr: 0, pitches: pitchCounts[key] ?? null });
++      lines.set(key, { name, team, outs: 0, bf: 0, h: 0, r: 0, er: 0, bb: 0, hbp: 0, k: 0, hr: 0, pitches: pitchCounts[key] ?? null });
+       order.push(key);
+     }
+     return key;
+@@ -48,6 +59,9 @@ export function pitchingLines(log: LoggedPlay[], pitchCounts: Record<string, num
+ 
+   // runner name -> the pitcher who let him on, for the half-inning in progress
+   let responsible = new Map<string, string>();
++  // runners who reached on an error, and the outs errors cost the defense
++  let reachedOnError = new Set<string>();
++  let errorOuts = 0;
+   let half = "";
+ 
+   for (const { play, before, after } of log) {
+@@ -55,6 +69,8 @@ export function pitchingLines(log: LoggedPlay[], pitchCounts: Record<string, num
+     if (thisHalf !== half) {
+       // the bases are empty at the start of every half-inning
+       responsible = new Map();
++      reachedOnError = new Set();
++      errorOuts = 0;
+       half = thisHalf;
+     }
+ 
+@@ -76,12 +92,21 @@ export function pitchingLines(log: LoggedPlay[], pitchCounts: Record<string, num
+     // charge each run to whoever let that runner on; the score is the
+     // authority on how many runs there were, the runner list on whose they were
+     const runs = Math.max(0, after.score[batting] - before.score[batting]);
++    // the inning would already be over had the errors been outs
++    const pastThreeOuts = before.outs + errorOuts >= 3;
++    const unearnedPlay = action === "error" || action === "passed ball";
++    const charge = (owner: string, runner: string | null) => {
++      const line = lines.get(owner)!;
++      line.r++;
++      const tainted = !!runner && reachedOnError.has(runner.toLowerCase());
++      if (!tainted && !unearnedPlay && !pastThreeOuts) line.er++;
++    };
+     let charged = 0;
+     for (const r of play.runners) {
+       if (charged >= runs || r.to.toLowerCase() !== "home") continue;
+       const runner = r.runner?.trim() || (r.from.toLowerCase() === "home" ? batter : null);
+       const owner = (runner && responsible.get(runner.toLowerCase())) || key;
+-      lines.get(owner)!.r++;
++      charge(owner, runner);
+       charged++;
+     }
+     // runs the play didn't put a runner to, like a home run that only lists
+@@ -97,11 +122,16 @@ export function pitchingLines(log: LoggedPlay[], pitchCounts: Record<string, num
+     for (const [base, runner] of unlisted) {
+       if (charged >= runs || !runner || mentioned.has(base)) continue;
+       const owner = responsible.get(runner.toLowerCase()) || key;
+-      lines.get(owner)!.r++;
++      charge(owner, runner);
+       responsible.delete(runner.toLowerCase());
+       charged++;
+     }
+-    line.r += runs - charged;
++    for (; charged < runs; charged++) charge(key, null);
++
++    if (action === "error") {
++      errorOuts++;
++      if (batter) reachedOnError.add(batter.toLowerCase());
++    }
+ 
+     for (const r of play.runners) {
+       const to = r.to.toLowerCase();
+diff --git a/src/lib/replay.test.ts b/src/lib/replay.test.ts
+new file mode 100644
+index 0000000..b93ecae
+--- /dev/null
++++ b/src/lib/replay.test.ts
+@@ -0,0 +1,87 @@
++import { describe, expect, it } from "vitest";
++import { INITIAL_GAME_STATE, applyPlayToState, type GameState, type Play } from "@/types/game";
++import type { LoggedPlay } from "./boxScore";
++import { replayLog, withEdit } from "./replay";
++
++const play = (p: Partial<Play> & Pick<Play, "action">): Play => ({
++  description: p.action,
++  runners: [],
++  rbi: 0,
++  outs_recorded: 0,
++  fielders_involved: [],
++  confidence: "high",
++  ...p,
++});
++
++function playGame(plays: Play[]) {
++  let state: GameState = INITIAL_GAME_STATE;
++  const log: LoggedPlay[] = [];
++  for (const p of plays) {
++    const after = applyPlayToState(state, p);
++    log.push({ play: p, before: state, after, slot: null });
++    state = after;
++  }
++  return log;
++}
++
++const single = (batter: string, extra: Play["runners"] = []) =>
++  play({ action: "single", batter, runners: [...extra, { from: "home", to: "1st", runner: batter }] });
++const out = (batter: string) => play({ action: "ground out", batter, runners: [{ from: "home", to: "out", runner: batter }], outs_recorded: 1 });
++
++describe("replayLog", () => {
++  it("plays an unchanged game back to the same place", () => {
++    const log = playGame([single("A"), single("B", [{ from: "1st", to: "3rd", runner: "A" }]), out("C")]);
++    const result = replayLog(log);
++    expect(result.state).toEqual(log[log.length - 1].after);
++    expect(result.problems).toEqual([]);
++  });
++
++  it("carries a corrected play through to the score after it", () => {
++    // A singled, then B's single was logged with A only reaching third
++    const log = playGame([single("A"), single("B", [{ from: "1st", to: "3rd", runner: "A" }]), out("C")]);
++    const fixed = single("B", [{ from: "1st", to: "home", runner: "A" }]);
++    const result = replayLog(withEdit(log, 1, { play: { ...fixed, rbi: 1 }, slot: null }));
++    expect(result.state.score.away).toBe(1);
++    expect(result.state.runners).toEqual({ first: "B", second: null, third: null });
++    expect(result.state.outs).toBe(1);
++  });
++
++  it("moves later plays into the half-inning they now fall in", () => {
++    // a play changed into the third out pushes the next one to the bottom half
++    const log = playGame([out("A"), out("B"), single("C"), single("D", [{ from: "1st", to: "2nd", runner: "C" }])]);
++    const result = replayLog(withEdit(log, 2, { play: out("C"), slot: null }));
++    expect(result.log[3].play.half).toBe("bottom");
++    expect(result.log[3].before.half).toBe("bottom");
++    expect(result.problems).toEqual([expect.objectContaining({ index: 3, message: expect.stringContaining("Nobody is on 1st") })]);
++  });
++
++  it("puts the runner who is now on a base into later plays that move him", () => {
++    // B was logged as reaching first, but it was really E who batted
++    const log = playGame([single("B"), play({ action: "stolen base", runners: [{ from: "1st", to: "2nd", runner: "B" }] })]);
++    const result = replayLog(withEdit(log, 0, { play: single("E"), slot: null }));
++    expect(result.log[1].play.runners[0].runner).toBe("E");
++    expect(result.state.runners.second).toBe("E");
++  });
++
++  it("takes a play out and plays the rest without it", () => {
++    const log = playGame([single("A"), out("B"), out("C")]);
++    const result = replayLog(withEdit(log, 0, null));
++    expect(result.log).toHaveLength(2);
++    expect(result.state.outs).toBe(2);
++    expect(result.state.runners.first).toBeNull();
++  });
++
++  it("keeps the scorer's confidence on later plays even when they no longer fit", () => {
++    const log = playGame([single("A"), play({ action: "stolen base", runners: [{ from: "1st", to: "2nd", runner: "A" }] })]);
++    const result = replayLog(withEdit(log, 0, null));
++    expect(result.log[0].play.confidence).toBe("high");
++    expect(result.problems).toHaveLength(1);
++  });
++
++  it("flags a play that comes after the game ended", () => {
++    const ninth: GameState = { ...INITIAL_GAME_STATE, inning: 9, score: { away: 0, home: 1 } };
++    const result = replayLog([out("A"), out("B"), out("C"), out("D")].map((p) => ({ play: p, slot: null })), 9, ninth);
++    expect(result.log[2].after.final).toBe(true);
++    expect(result.problems.some((p) => p.index === 3 && /already over/.test(p.message))).toBe(true);
++  });
++});
+diff --git a/src/lib/replay.ts b/src/lib/replay.ts
+new file mode 100644
+index 0000000..659540e
+--- /dev/null
++++ b/src/lib/replay.ts
+@@ -0,0 +1,71 @@
++import { INITIAL_GAME_STATE, REGULATION_INNINGS, applyPlayToState, type GameState, type Play } from "@/types/game";
++import { checkPlay } from "@/lib/checkPlay";
++import { inningLabel, type LoggedPlay } from "@/lib/boxScore";
++
++// Changing or removing a play partway through the game changes everything
++// after it: the score, the outs, who is on base, even which half-inning a
++// later play falls in. Rather than patch the later plays, the whole game is
++// played again from the first pitch with the corrected list.
++//
++// Later plays keep what the scorer confirmed. Each is re-anchored to the
++// inning it now falls in, and a runner moving off a base takes the name of
++// whoever is now standing there. A play that no longer fits (it moves a runner
++// off an empty base, or makes a fourth out) is kept as it was and reported,
++// so the scorer can fix it too instead of having it quietly rewritten.
++
++export interface ReplayProblem {
++  // position in the replayed log
++  index: number;
++  message: string;
++}
++
++export interface ReplayResult {
++  log: LoggedPlay[];
++  state: GameState;
++  problems: ReplayProblem[];
++}
++
++const BASE_KEY = { "1st": "first", "2nd": "second", "3rd": "third" } as const;
++
++export function replayLog(
++  entries: Pick<LoggedPlay, "play" | "slot">[],
++  innings: number = REGULATION_INNINGS,
++  start: GameState = INITIAL_GAME_STATE
++): ReplayResult {
++  const log: LoggedPlay[] = [];
++  const problems: ReplayProblem[] = [];
++  let state = start;
++
++  entries.forEach(({ play, slot }, index) => {
++    const before = state;
++    const label = `#${index + 1} (${inningLabel(before)})`;
++    if (before.final) {
++      problems.push({ index, message: `${label}: the game was already over before this play.` });
++    }
++
++    // the runner now on each base, in place of whoever was there before the edit
++    const runners = play.runners.map((r) => {
++      const key = BASE_KEY[r.from as keyof typeof BASE_KEY];
++      const now = key ? before.runners[key] : null;
++      return now && now.toLowerCase() !== "runner" ? { ...r, runner: now } : r;
++    });
++    const checked = checkPlay({ ...play, runners }, before);
++    for (const warning of checked.warnings) problems.push({ index, message: `${label}: ${warning}` });
++
++    // the scorer's confidence stands; only where the play happened changes
++    const replayed: Play = { ...checked.play, confidence: play.confidence };
++    const after = applyPlayToState(before, replayed, innings);
++    log.push({ play: replayed, before, after, slot });
++    state = after;
++  });
++
++  return { log, state, problems };
++}
++
++// the plays, in order, with one changed or taken out
++export function withEdit(log: LoggedPlay[], index: number, change: { play: Play; slot: number | null } | null) {
++  const entries = log.map(({ play, slot }) => ({ play, slot }));
++  if (change) entries[index] = change;
++  else entries.splice(index, 1);
++  return entries;
++}
+diff --git a/src/lib/shorthand.test.ts b/src/lib/shorthand.test.ts
+index 40c1f99..62bce7e 100644
+--- a/src/lib/shorthand.test.ts
++++ b/src/lib/shorthand.test.ts
+@@ -35,8 +35,9 @@ describe("parseShorthand", () => {
+     ["rung up", "strikeout", 1],
+     ["punched out", "strikeout", 1],
+     ["F8", "fly out", 1],
+-    ["L7", "fly out", 1],
+-    ["P4", "fly out", 1],
++    ["L7", "line out", 1],
++    ["P4", "pop out", 1],
++    ["popped out to four", "pop out", 1],
+     ["fly out to eight", "fly out", 1],
+     ["U3", "ground out", 1],
+     ["6-3", "ground out", 1],
+@@ -55,6 +56,26 @@ describe("parseShorthand", () => {
+     expect(play?.outs_recorded).toBe(outs);
+   });
+ 
++  it("puts the only runner on out when he's caught stealing or picked off", () => {
++    const onFirst: GameState = { ...empty, runners: { first: "Soto", second: null, third: null } };
++    const cs = parseShorthand("CS 2-6", onFirst)!;
++    expect(cs.action).toBe("caught stealing");
++    expect(cs.runners).toEqual([{ from: "1st", to: "out", runner: "Soto" }]);
++    expect(cs.outs_recorded).toBe(1);
++    expect(cs.fielders_involved).toEqual(["2", "6"]);
++    expect(cs.description).toBe("Soto caught stealing second");
++
++    const po = parseShorthand("picked off", { ...empty, runners: { first: null, second: "Lindor", third: null } })!;
++    expect(po.action).toBe("pickoff");
++    expect(po.runners).toEqual([{ from: "2nd", to: "out", runner: "Lindor" }]);
++    expect(po.fielders_involved).toEqual(["1", "6"]);
++  });
++
++  it("leaves caught stealing to the model when it isn't clear who it was", () => {
++    expect(parseShorthand("caught stealing", empty)).toBeNull();
++    expect(parseShorthand("CS", { ...empty, runners: { first: "A", second: "B", third: null } })).toBeNull();
++  });
++
+   it("leaves anything with more in it to the model", () => {
+     for (const t of [
+       "Rodriguez singles to right",
+diff --git a/src/lib/shorthand.ts b/src/lib/shorthand.ts
+index 585712c..3628bdd 100644
+--- a/src/lib/shorthand.ts
++++ b/src/lib/shorthand.ts
+@@ -158,6 +158,31 @@ export function parseShorthand(transcript: string, state: GameState): Play | nul
+     );
+   }
+ 
++  // CS / picked off, optionally with the throw ("cs 2 6", "picked off 1 3").
++  // only with one runner on, so there's no doubt who it was
++  m = s.match(/^(cs|caught stealing|thrown out stealing|po|pick ?off|picked off)(?: ([1-9](?: [1-9]){1,2}))?$/);
++  if (m) {
++    const on = (["first", "second", "third"] as const).filter((k) => state.runners[k]);
++    if (on.length !== 1) return null;
++    const key = on[0];
++    const base = key === "first" ? "1st" : key === "second" ? "2nd" : "3rd";
++    const stealing = /^(cs|caught|thrown)/.test(m[1]);
++    const next = key === "first" ? "second" : key === "second" ? "third" : "home";
++    const runner = state.runners[key];
++    // the usual throw: catcher to whoever covers, pitcher to the base
++    const cover = stealing ? (key === "first" ? ["2", "6"] : key === "second" ? ["2", "5"] : ["2"]) : key === "first" ? ["1", "3"] : key === "second" ? ["1", "6"] : ["1", "5"];
++    return play(
++      {
++        action: stealing ? "caught stealing" : "pickoff",
++        description: stealing ? `${runner} caught stealing ${next}` : `${runner} picked off ${key}`,
++        runners: [{ from: base, to: "out", runner }],
++        outs_recorded: 1,
++        fielders_involved: m[2] ? m[2].split(" ") : cover,
++      },
++      state
++    );
++  }
++
+   // E5, "error 5", "error on the 5"
+   m = s.match(/^(?:e|error)(?: on)?(?: the)? ([1-9])$/);
+   if (m) {
+@@ -182,7 +207,7 @@ export function parseShorthand(transcript: string, state: GameState): Play | nul
+     const fielder = m[2];
+     return play(
+       {
+-        action: "fly out",
++        action: hitType === "line drive" ? "line out" : hitType === "pop up" ? "pop out" : "fly out",
+         description: `${hitType === "line drive" ? "Line out" : hitType === "pop up" ? "Pop out" : "Fly out"} to ${POSITION_NAMES[fielder]}`,
+         runners: batterOut,
+         outs_recorded: 1,
+diff --git a/src/lib/sprayGeometry.ts b/src/lib/sprayGeometry.ts
+index d7bdb01..d6e09b9 100644
+--- a/src/lib/sprayGeometry.ts
++++ b/src/lib/sprayGeometry.ts
+@@ -51,7 +51,7 @@ export const LEGEND = [
+   { label: "Bunt", color: HIT_COLORS.bunt },
+ ];
+ 
+-const NO_BALL_IN_PLAY = new Set(["strikeout", "walk", "hit by pitch", "stolen base", "wild pitch", "passed ball", "balk"]);
++const NO_BALL_IN_PLAY = new Set(["strikeout", "walk", "hit by pitch", "stolen base", "caught stealing", "pickoff", "wild pitch", "passed ball", "balk"]);
+ 
+ export function isBallInPlay(play: Play): boolean {
+   return !NO_BALL_IN_PLAY.has(play.action.toLowerCase()) && !!(play.field_zone || play.hit_location);
+diff --git a/src/pages/Index.tsx b/src/pages/Index.tsx
+index eac8e8a..ce63423 100644
+--- a/src/pages/Index.tsx
++++ b/src/pages/Index.tsx
+@@ -1,5 +1,5 @@
+ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+-import { Download, FileSpreadsheet, FileText, Keyboard, RotateCcw, Trash2, Undo2 } from "lucide-react";
++import { Download, FileSpreadsheet, FileText, Keyboard, Pencil, RotateCcw, Trash2, Undo2, X } from "lucide-react";
+ import { VoiceRecorder } from "@/components/VoiceRecorder";
+ import { PlayCard } from "@/components/PlayCard";
+ import { SprayChart } from "@/components/SprayChart";
+@@ -28,9 +28,10 @@ import {
+   AlertDialogTrigger,
+ } from "@/components/ui/alert-dialog";
+ import { toast } from "sonner";
+-import { createGame, deletePlay, savePlay, type SaveResult } from "@/lib/persistence";
++import { createGame, deletePlay, replacePlaysFrom, savePlay, type SaveResult } from "@/lib/persistence";
++import { replayLog, withEdit, type ReplayProblem } from "@/lib/replay";
+ import { normalizePlay } from "@/lib/normalizePlay";
+-import { describePlay, isSkip, matchAnswer, openQuestions, type ClarifyOption } from "@/lib/clarify";
++import { describePlay, describeSituation, isSkip, matchAnswer, openQuestions, type ClarifyOption } from "@/lib/clarify";
+ import { ClarifyPanel } from "@/components/ClarifyPanel";
+ import { parseShorthand } from "@/lib/shorthand";
+ import { buildNameIndex, correctNames, loadPlayerNames } from "@/lib/correctNames";
+@@ -51,7 +52,7 @@ import {
+ } from "@/lib/lineup";
+ import { pitcherKey, pitchingLines } from "@/lib/pitching";
+ import { battingCsv, downloadCsv, fileBaseName, pitchingCsv, playByPlayCsv, type GameInfo } from "@/lib/exportCsv";
+-import { type Play, type GameState, INITIAL_GAME_STATE, applyPlayToState } from "@/types/game";
++import { type Play, type GameState, INITIAL_GAME_STATE, REGULATION_INNINGS, applyPlayToState } from "@/types/game";
+ 
+ // VITE_PARSE_URL points straight at a deployed endpoint - the GitHub Pages
+ // build uses the Supabase edge function, since a static site cannot hold the
+@@ -87,6 +88,8 @@ interface SavedGame {
+   lineups?: Lineups;
+   markedUp?: Record<Team, number | null>;
+   pitchCounts?: Record<string, number>;
++  // scheduled innings; missing means nine
++  innings?: number;
+ }
+ 
+ function loadSavedGame(): SavedGame | null {
+@@ -133,6 +136,11 @@ const Index = () => {
+   } | null>(null);
+   // questions about the play under review that have been answered or skipped
+   const [resolved, setResolved] = useState<string[]>([]);
++  const [innings, setInnings] = useState<number>(restored?.innings ?? REGULATION_INNINGS);
++  // the confirmed play being scored again, by its place in the log
++  const [editing, setEditing] = useState<number | null>(null);
++  // later plays that stopped adding up after an edit
++  const [problems, setProblems] = useState<ReplayProblem[]>([]);
+ 
+   const confirmedPlays = log.map((e) => e.play);
+ 
+@@ -146,6 +154,16 @@ const Index = () => {
+     home: dueUpSlot("home", log, markedUp.home),
+   };
+   const pitching = useMemo(() => pitchingLines(log, pitchCounts), [log, pitchCounts]);
++
++  // the situation a play under review happened in: now, or before the play
++  // being scored again
++  const editedEntry = editing != null ? log[editing] ?? null : null;
++  const reviewState = editedEntry?.before ?? gameState;
++  const reviewLog = editing != null ? log.slice(0, editing) : log;
++  const reviewBatting = battingTeam(reviewState.half);
++  const reviewDueUp = editedEntry
++    ? editedEntry.slot ?? dueUpSlot(reviewBatting, reviewLog)
++    : dueUp[batting];
+   const atBat = hasBattingOrder(lineups[batting]) ? currentBatter(lineups[batting], dueUp[batting]) : null;
+   const pitcherNow = currentPitcher(lineups[fielding]);
+ 
+@@ -186,12 +204,13 @@ const Index = () => {
+         lineups,
+         markedUp,
+         pitchCounts,
++        innings,
+       };
+       localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+     } catch {
+       // private windows can refuse storage; the game still works, it just won't survive a refresh
+     }
+-  }, [log, gameState, teamNames, startedAt, savedCount, lineups, markedUp, pitchCounts]);
++  }, [log, gameState, teamNames, startedAt, savedCount, lineups, markedUp, pitchCounts, innings]);
+ 
+   const ensureGame = async () => {
+     if (!gameRequest.current) {
+@@ -212,22 +231,22 @@ const Index = () => {
+   // most recent first
+   const batterSuggestions = useMemo(() => {
+     const names: string[] = [];
+-    for (let i = log.length - 1; i >= 0; i--) {
+-      const { play, before } = log[i];
++    for (let i = reviewLog.length - 1; i >= 0; i--) {
++      const { play, before } = reviewLog[i];
+       const name = play.batter?.trim();
+-      if (battingTeam(before.half) === batting && name && !names.some((n) => n.toLowerCase() === name.toLowerCase())) names.push(name);
++      if (battingTeam(before.half) === reviewBatting && name && !names.some((n) => n.toLowerCase() === name.toLowerCase())) names.push(name);
+     }
+     return names;
+-  }, [log, batting]);
++  }, [reviewLog, reviewBatting]);
+ 
+   // what the words left open about the play under review, worked out again
+   // after every answer since one answer can change what the next should offer
+   const questions = useMemo(
+     () =>
+       currentPlay && reviewBase
+-        ? openQuestions(currentPlay, { state: gameState, transcript: reviewBase.transcript, resolved, batterSuggestions })
++        ? openQuestions(currentPlay, { state: reviewState, transcript: reviewBase.transcript, resolved, batterSuggestions })
+         : [],
+-    [currentPlay, reviewBase, gameState, resolved, batterSuggestions]
++    [currentPlay, reviewBase, reviewState, resolved, batterSuggestions]
+   );
+   const question = questions[0] ?? null;
+   const mustAnswer = questions.some((q) => q.required);
+@@ -235,8 +254,11 @@ const Index = () => {
+   const showPlay = (play: Play, info: ParseInfo, transcript: string, alreadyResolved: string[] = []) => {
+     // the lineup fills the batter and pitcher first, so the base check sees
+     // the real names
+-    const lined = applyLineup(play, gameState, lineups, dueUp[batting], shownTeams);
+-    const checked = checkPlay(lined.play, gameState);
++    const history = editedEntry
++      ? { batter: editedEntry.play.batter, pitcher: editedEntry.play.pitcher, slot: editedEntry.slot }
++      : undefined;
++    const lined = applyLineup(play, reviewState, lineups, reviewDueUp, shownTeams, history);
++    const checked = checkPlay(lined.play, reviewState);
+     const allWarnings = [...lined.warnings, ...checked.warnings];
+     setReviewBase({ play: checked.play, lineupWarnings: lined.warnings, transcript, resolved: alreadyResolved });
+     setResolved(alreadyResolved);
+@@ -265,7 +287,7 @@ const Index = () => {
+   // fix or cause an outs mismatch
+   const settle = (next: Play, ids: string[]) => {
+     // the parser's description may state what the scorer just contradicted
+-    const rechecked = checkPlay({ ...next, description: describePlay(next, gameState) }, gameState);
++    const rechecked = checkPlay({ ...next, description: describePlay(next, reviewState) }, reviewState);
+     setCurrentPlay(rechecked.play);
+     setWarnings([...(reviewBase?.lineupWarnings ?? []), ...rechecked.warnings]);
+     setResolved((prev) => [...prev, ...ids]);
+@@ -277,7 +299,7 @@ const Index = () => {
+ 
+   const handleStartOver = () => {
+     if (!reviewBase) return;
+-    const rechecked = checkPlay(reviewBase.play, gameState);
++    const rechecked = checkPlay(reviewBase.play, reviewState);
+     setCurrentPlay(rechecked.play);
+     setWarnings([...reviewBase.lineupWarnings, ...rechecked.warnings]);
+     setResolved(reviewBase.resolved);
+@@ -299,6 +321,10 @@ const Index = () => {
+       handleAnswerText(rawTranscript);
+       return;
+     }
++    if (gameState.final && editing == null) {
++      toast("The game is over. Undo or edit a play to change it, or start a new game.");
++      return;
++    }
+     const started = performance.now();
+     const transcript = correctNames(rawTranscript, nameIndex);
+     setLastTranscript(transcript);
+@@ -309,7 +335,7 @@ const Index = () => {
+     setParseInfo(null);
+ 
+     // plain shorthand ("6-3", "K looking") is scored right here, no network
+-    const local = parseShorthand(transcript, gameState);
++    const local = parseShorthand(transcript, reviewState);
+     if (local) {
+       showPlay(local, { source: "shorthand", ms: Math.round(performance.now() - started) }, transcript, opts.resolved);
+       return;
+@@ -322,8 +348,8 @@ const Index = () => {
+         headers: { "Content-Type": "application/json" },
+         body: JSON.stringify({
+           transcript,
+-          gameState,
+-          context: buildParseContext(log, gameState, teamNames, { lineups, dueUp: dueUp[batting] }),
++          gameState: reviewState,
++          context: buildParseContext(reviewLog, reviewState, teamNames, { lineups, dueUp: reviewDueUp }),
+         }),
+         signal: AbortSignal.timeout(PARSE_TIMEOUT_MS),
+       });
+@@ -378,9 +404,16 @@ const Index = () => {
+     // network; persistence catches up behind it. the readings the scorer
+     // already chose between aren't part of the record
+     const play: Play = { ...currentPlay, alternatives: null };
++    if (editing != null) {
++      applyEdit(editing, { play, slot: pendingSlot }, "Play updated");
++      setCurrentPlay(null);
++      setWarnings([]);
++      setLastTranscript("");
++      return;
++    }
+     const playIndex = log.length;
+     const before = gameState;
+-    const after = applyPlayToState(before, play);
++    const after = applyPlayToState(before, play, innings);
+     const slot = pendingSlot;
+ 
+     setLog((prev) => [...prev, { play, before, after, slot }]);
+@@ -388,7 +421,13 @@ const Index = () => {
+     setPendingSlot(null);
+     // a hand-marked batter only stands until that team's next plate appearance
+     if (slot != null) setMarkedUp((prev) => ({ ...prev, [battingTeam(before.half)]: null }));
+-    toast.success(after.inning !== before.inning || after.half !== before.half ? `Play confirmed. Side retired, ${inningLabel(after)}.` : "Play confirmed!");
++    toast.success(
++      after.final
++        ? `Ballgame. Final: ${shownTeams.away} ${after.score.away}, ${shownTeams.home} ${after.score.home}.`
++        : after.inning !== before.inning || after.half !== before.half
++          ? `Play confirmed. Side retired, ${inningLabel(after)}.`
++          : "Play confirmed!"
++    );
+     setCurrentPlay(null);
+     setWarnings([]);
+     setLastTranscript("");
+@@ -414,7 +453,65 @@ const Index = () => {
+     setResolved([]);
+     setWarnings([]);
+     setPendingSlot(null);
+-    toast("Play rejected. Try recording again.");
++    toast(editing != null ? "Kept the play as it was. Say it again, or cancel the edit." : "Play rejected. Try recording again.");
++  };
++
++  // plays the game again with one play changed or removed, so everything
++  // after it (score, outs, bases, innings) follows from the correction
++  const applyEdit = async (index: number, change: { play: Play; slot: number | null } | null, message: string) => {
++    const result = replayLog(withEdit(log, index, change), innings);
++    setLog(result.log);
++    setGameState(result.state);
++    setProblems(result.problems);
++    setEditing(null);
++    setReviewBase(null);
++    setResolved([]);
++    setPendingSlot(null);
++    if (result.problems.length) {
++      toast.warning(`${message}. ${result.problems.length} later ${result.problems.length === 1 ? "play no longer fits" : "plays no longer fit"}; see the list above the plays.`);
++    } else {
++      toast.success(`${message}. The score and bases were worked out again.`);
++    }
++
++    if (gameId.current) {
++      const saved = await replacePlaysFrom(gameId.current, index, result.log.slice(index).map((e) => e.play));
++      if ("error" in saved) setSaveError(saved.error);
++      else {
++        setSavedCount(result.log.length);
++        setSaveError(null);
++      }
++    }
++  };
++
++  const handleEdit = (index: number) => {
++    setEditing(index);
++    setCurrentPlay(null);
++    setReviewBase(null);
++    setResolved([]);
++    setWarnings([]);
++    setPendingSlot(null);
++    setLastTranscript("");
++    toast(`Say or type play #${index + 1} the way it really happened.`);
++  };
++
++  const handleCancelEdit = () => {
++    setEditing(null);
++    setCurrentPlay(null);
++    setReviewBase(null);
++    setResolved([]);
++    setWarnings([]);
++    setPendingSlot(null);
++  };
++
++  const handleDelete = (index: number) => applyEdit(index, null, `Removed play #${index + 1}`);
++
++  const handleInnings = (value: number) => {
++    setInnings(value);
++    // a game that was over may not be, or one in progress may now be over
++    const result = replayLog(log, value);
++    setLog(result.log);
++    setGameState(result.state);
++    setProblems(result.problems);
+   };
+ 
+   const handleUndo = async () => {
+@@ -423,6 +520,7 @@ const Index = () => {
+     const playIndex = log.length - 1;
+     setLog((prev) => prev.slice(0, -1));
+     setGameState(last.before);
++    setProblems((prev) => prev.filter((p) => p.index < playIndex));
+     toast(`Undid: ${last.play.description}`);
+ 
+     // take it out of the database too, so the next play can reuse its slot
+@@ -451,6 +549,9 @@ const Index = () => {
+     setPendingSlot(null);
+     setReviewBase(null);
+     setResolved([]);
++    setEditing(null);
++    setProblems([]);
++    setInnings(REGULATION_INNINGS);
+     toast.success("New game started!");
+   };
+ 
+@@ -502,7 +603,7 @@ const Index = () => {
+   };
+ 
+   const setTeam = (team: Team, name: string) => setTeamNames((prev) => ({ ...prev, [team]: name }));
+-  const info = (): GameInfo => ({ teamNames: shownTeams, date: new Date(startedAt), pitchCounts });
++  const info = (): GameInfo => ({ teamNames: shownTeams, date: new Date(startedAt), pitchCounts, innings });
+ 
+   return (
+     <div className="min-h-screen bg-background">
+@@ -521,7 +622,7 @@ const Index = () => {
+             size="sm"
+             variant="secondary"
+             onClick={handleUndo}
+-            disabled={log.length === 0}
++            disabled={log.length === 0 || editing != null}
+             title="Take back the last confirmed play"
+           >
+             <Undo2 className="w-4 h-4 mr-1" /> Undo
+@@ -592,6 +693,18 @@ const Index = () => {
+             placeholder="Home team"
+             className="w-44 font-semibold"
+           />
++          <label className="flex items-center gap-2 text-muted-foreground ml-2">
++            Innings
++            <select
++              value={innings}
++              onChange={(e) => handleInnings(Number(e.target.value))}
++              className="h-9 rounded-md border bg-background px-2 text-foreground"
++              title="Scheduled innings. Seven for the second game of a doubleheader"
++            >
++              <option value={9}>9</option>
++              <option value={7}>7</option>
++            </select>
++          </label>
+         </div>
+ 
+         {/* Scoreboard */}
+@@ -602,7 +715,7 @@ const Index = () => {
+           pitcher={pitcherNow}
+           pitches={pitcherNow ? pitchCounts[pitcherKey(fielding, pitcherNow)] ?? 0 : null}
+         />
+-        <LineScore log={log} state={gameState} teamNames={shownTeams} />
++        <LineScore log={log} state={gameState} teamNames={shownTeams} innings={innings} />
+ 
+         {/* Whether confirmed plays are actually reaching the database */}
+         {(savedCount > 0 || saveError) && (
+@@ -621,6 +734,35 @@ const Index = () => {
+             the right. phones stack them in the same order */}
+         <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
+           <section className="space-y-6" aria-label="Score a play">
++            {editing != null && editedEntry && (
++              <div className="rounded-xl border-2 border-primary/40 bg-primary/5 p-4 flex items-start gap-3" role="status">
++                <Pencil className="w-4 h-4 mt-0.5 shrink-0 text-primary" />
++                <div className="flex-1 text-sm">
++                  <p className="font-semibold">
++                    Editing play #{editing + 1} ({inningLabel(editedEntry.before)}, {describeSituation(editedEntry.before)})
++                  </p>
++                  <p className="text-muted-foreground">
++                    Was: {editedEntry.play.description}. Say or type what really happened; every play after it is worked out
++                    again when you confirm.
++                  </p>
++                </div>
++                <Button size="sm" variant="ghost" onClick={handleCancelEdit}>
++                  <X className="w-4 h-4 mr-1" /> Cancel
++                </Button>
++              </div>
++            )}
++
++            {gameState.final && editing == null && (
++              <div className="rounded-xl border bg-muted p-4 text-sm" role="status">
++                <p className="font-semibold">
++                  Final: {shownTeams.away} {gameState.score.away}, {shownTeams.home} {gameState.score.home}
++                </p>
++                <p className="text-muted-foreground">
++                  The game is over. Edit or undo a play to change it, or export the game.
++                </p>
++              </div>
++            )}
++
+             {/* Voice recorder */}
+             <div className="bg-card border rounded-xl p-6 space-y-5">
+               <VoiceRecorder onTranscriptReady={handleTranscript} isProcessing={isProcessing} />
+@@ -723,20 +865,41 @@ const Index = () => {
+                   Confirmed Plays ({log.length})
+                 </h2>
+                 {log.length > 0 && (
+-                  <Button size="sm" variant="ghost" onClick={handleUndo} className="h-7 text-xs">
++                  <Button size="sm" variant="ghost" onClick={handleUndo} disabled={editing != null} className="h-7 text-xs">
+                     <Trash2 className="w-3.5 h-3.5 mr-1" /> Remove last
+                   </Button>
+                 )}
+               </div>
++              {problems.length > 0 && (
++                <div className="mb-3 rounded-lg bg-warning/15 px-4 py-3 text-sm space-y-1">
++                  <p className="font-semibold">After the change, these plays don't add up:</p>
++                  <ul className="space-y-1">
++                    {problems.map((p) => (
++                      <li key={`${p.index}:${p.message}`} className="flex items-start justify-between gap-2">
++                        <span>{p.message}</span>
++                        <Button size="sm" variant="ghost" className="h-6 text-xs shrink-0" onClick={() => handleEdit(p.index)}>
++                          Fix
++                        </Button>
++                      </li>
++                    ))}
++                  </ul>
++                </div>
++              )}
+               {log.length === 0 ? (
+                 <p className="text-sm text-muted-foreground">No plays yet.</p>
+               ) : (
+                 <div className="space-y-2 lg:max-h-[28rem] lg:overflow-y-auto lg:pr-1">
+                   {[...log].reverse().map(({ play, before, after }, i) => {
++                    const index = log.length - 1 - i;
+                     const team = before.half === "top" ? "away" : "home";
+                     const runs = after.score[team] - before.score[team];
+                     return (
+-                      <div key={log.length - i} className="bg-muted rounded-lg p-3 text-sm flex items-center gap-3">
++                      <div
++                        key={index}
++                        className={`group rounded-lg p-3 text-sm flex items-center gap-3 ${
++                          editing === index ? "bg-primary/10 ring-2 ring-primary/40" : "bg-muted"
++                        }`}
++                      >
+                         <span className="shrink-0 w-8 text-xs text-muted-foreground tabular-nums">{inningLabel(before)}</span>
+                         <span className="shrink-0 text-xs bg-primary text-primary-foreground rounded px-2 py-0.5 uppercase font-bold">
+                           {play.action}
+@@ -754,6 +917,46 @@ const Index = () => {
+                             +{runs} {runs === 1 ? "run" : "runs"}
+                           </span>
+                         )}
++                        <span className="shrink-0 flex gap-0.5">
++                          <Button
++                            size="icon"
++                            variant="ghost"
++                            className="h-7 w-7"
++                            onClick={() => handleEdit(index)}
++                            disabled={isProcessing}
++                            title={`Edit play #${index + 1}`}
++                            aria-label={`Edit play #${index + 1}`}
++                          >
++                            <Pencil className="w-3.5 h-3.5" />
++                          </Button>
++                          <AlertDialog>
++                            <AlertDialogTrigger asChild>
++                              <Button
++                                size="icon"
++                                variant="ghost"
++                                className="h-7 w-7 text-destructive"
++                                disabled={isProcessing || editing != null}
++                                title={`Remove play #${index + 1}`}
++                                aria-label={`Remove play #${index + 1}`}
++                              >
++                                <Trash2 className="w-3.5 h-3.5" />
++                              </Button>
++                            </AlertDialogTrigger>
++                            <AlertDialogContent>
++                              <AlertDialogHeader>
++                                <AlertDialogTitle>Remove play #{index + 1}?</AlertDialogTitle>
++                                <AlertDialogDescription>
++                                  "{play.description}" comes out of the game, and the score, outs and bases for every play
++                                  after it are worked out again.
++                                </AlertDialogDescription>
++                              </AlertDialogHeader>
++                              <AlertDialogFooter>
++                                <AlertDialogCancel>Keep it</AlertDialogCancel>
++                                <AlertDialogAction onClick={() => handleDelete(index)}>Remove play</AlertDialogAction>
++                              </AlertDialogFooter>
++                            </AlertDialogContent>
++                          </AlertDialog>
++                        </span>
+                       </div>
+                     );
+                   })}
+diff --git a/src/types/game.ts b/src/types/game.ts
+index 8dc3c32..f678be0 100644
+--- a/src/types/game.ts
++++ b/src/types/game.ts
+@@ -8,8 +8,17 @@ export interface GameState {
+     second: string | null;
+     third: string | null;
+   };
++  // set once the game is over: the home team leads after the top of the last
++  // scheduled inning, someone leads after a full extra inning, or the home team
++  // goes ahead in the bottom of the last inning (a walk-off). Missing from
++  // games saved before it existed, which reads as not over
++  final?: boolean;
+ }
+ 
++// Atlantic League games are nine innings; the second game of a doubleheader
++// can be scheduled for seven
++export const REGULATION_INNINGS = 9;
++
+ export interface Play {
+   inning?: number | null;
+   half?: string | null;
+@@ -42,12 +51,12 @@ export const INITIAL_GAME_STATE: GameState = {
+   runners: { first: null, second: null, third: null },
+ };
+ 
+-export function applyPlayToState(state: GameState, play: Play): GameState {
+-  const next = {
++export function applyPlayToState(state: GameState, play: Play, innings: number = REGULATION_INNINGS): GameState {
++  const next: GameState = {
+     ...state,
+     outs: state.outs + play.outs_recorded,
+     score: { ...state.score },
+-    runners: { ...state.runners },
++    runners: runnersAfter(state, play),
+   };
+ 
+   const runs = runsScored(play, state);
+@@ -59,20 +68,61 @@ export function applyPlayToState(state: GameState, play: Play): GameState {
+     }
+   }
+ 
++  const lastInning = state.inning >= innings;
++
++  // Walk-off: the home team goes ahead in the bottom of the last inning (or any
++  // extra one) and the game ends on the spot. Only the run that wins it
++  // counts, unless it was a home run, when every run does (rule 7.01(g))
++  if (state.half === "bottom" && lastInning && next.score.home > next.score.away && state.score.home <= state.score.away) {
++    if (play.action.toLowerCase() !== "home run") next.score.home = state.score.away + 1;
++    next.outs = Math.min(next.outs, 3);
++    next.final = true;
++    return next;
++  }
++
++  // Check for 3 outs → flip half-inning, unless that ends the game
++  if (next.outs >= 3) {
++    next.runners = { first: null, second: null, third: null };
++    // the home team doesn't bat in the last inning if it's already ahead, and
++    // an extra inning that ends with someone ahead ends the game
++    const homeAhead = state.half === "top" && lastInning && next.score.home > next.score.away;
++    const decided = state.half === "bottom" && lastInning && next.score.home !== next.score.away;
++    if (homeAhead || decided) {
++      next.outs = 3;
++      next.final = true;
++      return next;
++    }
++    next.outs = 0;
++    if (state.half === "top") {
++      next.half = "bottom";
++    } else {
++      next.half = "top";
++      next.inning = state.inning + 1;
++    }
++  }
++
++  return next;
++}
++
++// Where everyone stands once the play is over, before a third out clears the
++// bases. Runners still on base when a half-inning ends were left on base.
++export function runnersAfter(state: GameState, play: Play): GameState["runners"] {
++  const runners = { ...state.runners };
++
+   // Apply runner movements from the AI response
+   for (const r of play.runners) {
+     const fromKey = baseToKey(r.from);
+     const toKey = baseToKey(r.to);
+-    const runnerName = r.runner || (fromKey ? next.runners[fromKey] : null);
++    const runnerName = r.runner || (fromKey ? runners[fromKey] : null);
+ 
+     // Clear origin base
+-    if (fromKey && next.runners[fromKey]) {
+-      next.runners[fromKey] = null;
++    if (fromKey && runners[fromKey]) {
++      runners[fromKey] = null;
+     }
+ 
+     // Place on destination base (if not scored/out)
+     if (toKey && r.to !== "home" && r.to !== "out") {
+-      next.runners[toKey] = runnerName || "runner";
++      runners[toKey] = runnerName || "runner";
+     }
+   }
+ 
+@@ -81,28 +131,16 @@ export function applyPlayToState(state: GameState, play: Play): GameState {
+   if (play.batter && reachActions.includes(play.action.toLowerCase())) {
+     const dest = actionToBase(play.action.toLowerCase());
+     if (dest) {
+-      next.runners[dest] = play.batter;
++      runners[dest] = play.batter;
+     }
+   }
+ 
+   // Home run: clear all bases
+   if (play.action.toLowerCase() === "home run") {
+-    next.runners = { first: null, second: null, third: null };
+-  }
+-
+-  // Check for 3 outs → flip half-inning
+-  if (next.outs >= 3) {
+-    next.outs = 0;
+-    next.runners = { first: null, second: null, third: null };
+-    if (state.half === "top") {
+-      next.half = "bottom";
+-    } else {
+-      next.half = "top";
+-      next.inning = state.inning + 1;
+-    }
++    return { first: null, second: null, third: null };
+   }
+ 
+-  return next;
++  return runners;
+ }
+ 
+ // Every runner who crosses the plate counts, not just the ones credited as
+diff --git a/supabase/functions/parse-play/index.ts b/supabase/functions/parse-play/index.ts
+index f4c1af4..98e11ce 100644
+--- a/supabase/functions/parse-play/index.ts
++++ b/supabase/functions/parse-play/index.ts
+@@ -14,7 +14,7 @@ const corsHeaders = {
+ };
+ 
+ // BEGIN STATIC_PROMPT - generated by `npm run sync:prompt` in server/, do not edit by hand
+-const STATIC_PROMPT = "Turn a baseball scorekeeper's spoken words into one scored play. Reply with one JSON object only.\n\nAlways include action, description, runners, rbi, outs_recorded, fielders_involved, confidence. Add other keys only when the words tell you; never write null.\naction: single | double | triple | home run | strikeout | walk | fly out | ground out | hit by pitch | error | fielder's choice | stolen base | wild pitch | passed ball | balk | sacrifice fly\ndescription: under 12 words\nbatter, pitcher: names\nrunners: [{\"from\",\"to\",\"runner\"}] everyone who moved or was put out, batter included as from \"home\". Bases: home, 1st, 2nd, 3rd; to can be \"out\"\nfielders_involved: position numbers as strings\nhit_type: ground ball | line drive | fly ball | pop up | bunt. hit_location: e.g. shortstop, left-center gap. hit_hardness: soft | medium | hard\npitch_type, pitch_location, count: only if said\nconfidence: high | medium | low\nalternatives: only when the words fit more than one action just as well (\"reached when the shortstop booted it\": error or single), the other actions; the scorer is asked to pick\n\nRULES\n- Only runners listed in STATE are on base. Never move a runner off an empty base; if the words seem to, confidence low.\n- Forced runners advance; unmentioned runners stay. A home run scores everyone on base.\n- outs_recorded = runners sent \"out\". rbi = runners reaching home, none on an error, wild pitch, passed ball, balk, steal or double play.\n- Mangled words may be names (\"show hey\" = Shohei); use the intended name.\n- Unsure: best guess, confidence low.\n\nSHORTHAND\nPositions (fielders_involved): 1=pitcher, 2=catcher, 3=first baseman, 4=second baseman, 5=third baseman, 6=shortstop, 7=left fielder, 8=center fielder, 9=right fielder\n\"6-4-3\" = throw order. E5 = error by 5. F8/L7/P4/G6 = fly/line/pop/ground out to that fielder. U3 = unassisted.\nwalk: BB, ball four, free pass. hit by pitch: HBP, plunked, drilled. strikeout: K, punched out; looking: backwards K, rung up\nhome run: HR, homer, dinger, jack, bomb, goes yard; solo shot = nobody on; grand slam = bases loaded, 4 rbi\nSF = sacrifice fly. sac bunt = ground out, hit_type bunt. FC, SB, WP, PB, BK = fielder's choice, stolen base, wild pitch, passed ball, balk. 1B/2B/3B as a play = single/double/triple\ndouble play (DP, turned two, twin killing) = 2 outs, action ground out, or fly out if caught in the air\nline drive: liner, frozen rope, laser. fly ball: can of corn, blooper, Texas Leaguer. ground ball: chopper, dribbler, nubber, roller, worm burner\n\nEXAMPLES\n\"Soto doubles down the right field line, Lindor scores from first\" -> {\"action\":\"double\",\"description\":\"Soto doubles down the right field line, Lindor scores\",\"batter\":\"Soto\",\"runners\":[{\"from\":\"1st\",\"to\":\"home\",\"runner\":\"Lindor\"},{\"from\":\"home\",\"to\":\"2nd\",\"runner\":\"Soto\"}],\"rbi\":1,\"outs_recorded\":0,\"fielders_involved\":[\"9\"],\"hit_location\":\"right field line\",\"hit_type\":\"line drive\"}\n\"sac fly to right, runner tags from third\" -> {\"action\":\"sacrifice fly\",\"description\":\"Fly ball to right field, runner tags from third and scores\",\"runners\":[{\"from\":\"3rd\",\"to\":\"home\"},{\"from\":\"home\",\"to\":\"out\"}],\"rbi\":1,\"outs_recorded\":1,\"fielders_involved\":[\"9\"],\"hit_location\":\"right field\",\"hit_type\":\"fly ball\"}\n\"Ohtani steals second\" -> {\"action\":\"stolen base\",\"description\":\"Ohtani steals second\",\"runners\":[{\"from\":\"1st\",\"to\":\"2nd\",\"runner\":\"Ohtani\"}],\"rbi\":0,\"outs_recorded\":0,\"fielders_involved\":[\"2\",\"6\"]}\n\"Judge got rung up on a slider\" -> {\"action\":\"strikeout\",\"description\":\"Judge caught looking on a slider\",\"batter\":\"Judge\",\"runners\":[{\"from\":\"home\",\"to\":\"out\",\"runner\":\"Judge\"}],\"rbi\":0,\"outs_recorded\":1,\"fielders_involved\":[\"1\",\"2\"],\"pitch_type\":\"slider\"}";
++const STATIC_PROMPT = "Turn a baseball scorekeeper's spoken words into one scored play. Reply with one JSON object only.\n\nAlways include action, description, runners, rbi, outs_recorded, fielders_involved, confidence. Add other keys only when the words tell you; never write null.\naction: single | double | triple | home run | strikeout | walk | fly out | line out | pop out | ground out | hit by pitch | error | fielder's choice | stolen base | caught stealing | pickoff | wild pitch | passed ball | balk | sacrifice fly | sacrifice bunt\ndescription: under 12 words\nbatter, pitcher: names\nrunners: [{\"from\",\"to\",\"runner\"}] everyone who moved or was put out, batter included as from \"home\". Bases: home, 1st, 2nd, 3rd; to can be \"out\"\nfielders_involved: position numbers as strings\nhit_type: ground ball | line drive | fly ball | pop up | bunt. hit_location: e.g. shortstop, left-center gap. hit_hardness: soft | medium | hard\npitch_type, pitch_location, count: only if said\nconfidence: high | medium | low\nalternatives: only when the words fit more than one action just as well (\"reached when the shortstop booted it\": error or single), the other actions; the scorer is asked to pick\n\nRULES\n- Only runners listed in STATE are on base. Never move a runner off an empty base; if the words seem to, confidence low.\n- Forced runners advance; unmentioned runners stay. A home run scores everyone on base.\n- outs_recorded = runners sent \"out\". rbi = runners reaching home, none on an error, wild pitch, passed ball, balk, steal or double play.\n- Mangled words may be names (\"show hey\" = Shohei); use the intended name.\n- Unsure: best guess, confidence low.\n\nSHORTHAND\nPositions (fielders_involved): 1=pitcher, 2=catcher, 3=first baseman, 4=second baseman, 5=third baseman, 6=shortstop, 7=left fielder, 8=center fielder, 9=right fielder\n\"6-4-3\" = throw order. E5 = error by 5. F8/L7/P4/G6 = fly/line/pop/ground out to that fielder. U3 = unassisted.\nwalk: BB, ball four, free pass. hit by pitch: HBP, plunked, drilled. strikeout: K, punched out; looking: backwards K, rung up\nhome run: HR, homer, dinger, jack, bomb, goes yard; solo shot = nobody on; grand slam = bases loaded, 4 rbi\nSF = sacrifice fly. SH, sac bunt, sacrifice = sacrifice bunt (batter out, runners move up). FC, SB, CS, WP, PB, BK = fielder's choice, stolen base, caught stealing, wild pitch, passed ball, balk. PO, picked off = pickoff. 1B/2B/3B as a play = single/double/triple\nlined out, liner caught = line out. popped up, pop fly caught, infield fly = pop out. fly out = fly ball caught\ndouble play (DP, turned two, twin killing) = 2 outs, action ground out, or line out / fly out if caught in the air\nline drive: liner, frozen rope, laser. fly ball: can of corn, blooper, Texas Leaguer. ground ball: chopper, dribbler, nubber, roller, worm burner\n\nEXAMPLES\n\"Soto doubles down the right field line, Lindor scores from first\" -> {\"action\":\"double\",\"description\":\"Soto doubles down the right field line, Lindor scores\",\"batter\":\"Soto\",\"runners\":[{\"from\":\"1st\",\"to\":\"home\",\"runner\":\"Lindor\"},{\"from\":\"home\",\"to\":\"2nd\",\"runner\":\"Soto\"}],\"rbi\":1,\"outs_recorded\":0,\"fielders_involved\":[\"9\"],\"hit_location\":\"right field line\",\"hit_type\":\"line drive\"}\n\"sac fly to right, runner tags from third\" -> {\"action\":\"sacrifice fly\",\"description\":\"Fly ball to right field, runner tags from third and scores\",\"runners\":[{\"from\":\"3rd\",\"to\":\"home\"},{\"from\":\"home\",\"to\":\"out\"}],\"rbi\":1,\"outs_recorded\":1,\"fielders_involved\":[\"9\"],\"hit_location\":\"right field\",\"hit_type\":\"fly ball\"}\n\"Ohtani steals second\" -> {\"action\":\"stolen base\",\"description\":\"Ohtani steals second\",\"runners\":[{\"from\":\"1st\",\"to\":\"2nd\",\"runner\":\"Ohtani\"}],\"rbi\":0,\"outs_recorded\":0,\"fielders_involved\":[\"2\",\"6\"]}\n\"Judge got rung up on a slider\" -> {\"action\":\"strikeout\",\"description\":\"Judge caught looking on a slider\",\"batter\":\"Judge\",\"runners\":[{\"from\":\"home\",\"to\":\"out\",\"runner\":\"Judge\"}],\"rbi\":0,\"outs_recorded\":1,\"fielders_involved\":[\"1\",\"2\"],\"pitch_type\":\"slider\"}";
+ // END STATIC_PROMPT
+ 
+ interface GameState {

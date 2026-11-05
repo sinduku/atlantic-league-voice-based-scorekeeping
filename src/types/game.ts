@@ -8,7 +8,16 @@ export interface GameState {
     second: string | null;
     third: string | null;
   };
+  // set once the game is over: the home team leads after the top of the last
+  // scheduled inning, someone leads after a full extra inning, or the home team
+  // goes ahead in the bottom of the last inning (a walk-off). Missing from
+  // games saved before it existed, which reads as not over
+  final?: boolean;
 }
+
+// Atlantic League games are nine innings; the second game of a doubleheader
+// can be scheduled for seven
+export const REGULATION_INNINGS = 9;
 
 export interface Play {
   inning?: number | null;
@@ -42,12 +51,12 @@ export const INITIAL_GAME_STATE: GameState = {
   runners: { first: null, second: null, third: null },
 };
 
-export function applyPlayToState(state: GameState, play: Play): GameState {
-  const next = {
+export function applyPlayToState(state: GameState, play: Play, innings: number = REGULATION_INNINGS): GameState {
+  const next: GameState = {
     ...state,
     outs: state.outs + play.outs_recorded,
     score: { ...state.score },
-    runners: { ...state.runners },
+    runners: runnersAfter(state, play),
   };
 
   const runs = runsScored(play, state);
@@ -59,41 +68,31 @@ export function applyPlayToState(state: GameState, play: Play): GameState {
     }
   }
 
-  // Apply runner movements from the AI response
-  for (const r of play.runners) {
-    const fromKey = baseToKey(r.from);
-    const toKey = baseToKey(r.to);
-    const runnerName = r.runner || (fromKey ? next.runners[fromKey] : null);
+  const lastInning = state.inning >= innings;
 
-    // Clear origin base
-    if (fromKey && next.runners[fromKey]) {
-      next.runners[fromKey] = null;
-    }
-
-    // Place on destination base (if not scored/out)
-    if (toKey && r.to !== "home" && r.to !== "out") {
-      next.runners[toKey] = runnerName || "runner";
-    }
+  // Walk-off: the home team goes ahead in the bottom of the last inning (or any
+  // extra one) and the game ends on the spot. Only the run that wins it
+  // counts, unless it was a home run, when every run does (rule 7.01(g))
+  if (state.half === "bottom" && lastInning && next.score.home > next.score.away && state.score.home <= state.score.away) {
+    if (play.action.toLowerCase() !== "home run") next.score.home = state.score.away + 1;
+    next.outs = Math.min(next.outs, 3);
+    next.final = true;
+    return next;
   }
 
-  // If batter reached base (hit, walk, HBP, error, FC)
-  const reachActions = ["single", "double", "triple", "walk", "hit by pitch", "error", "fielder's choice"];
-  if (play.batter && reachActions.includes(play.action.toLowerCase())) {
-    const dest = actionToBase(play.action.toLowerCase());
-    if (dest) {
-      next.runners[dest] = play.batter;
-    }
-  }
-
-  // Home run: clear all bases
-  if (play.action.toLowerCase() === "home run") {
-    next.runners = { first: null, second: null, third: null };
-  }
-
-  // Check for 3 outs → flip half-inning
+  // Check for 3 outs → flip half-inning, unless that ends the game
   if (next.outs >= 3) {
-    next.outs = 0;
     next.runners = { first: null, second: null, third: null };
+    // the home team doesn't bat in the last inning if it's already ahead, and
+    // an extra inning that ends with someone ahead ends the game
+    const homeAhead = state.half === "top" && lastInning && next.score.home > next.score.away;
+    const decided = state.half === "bottom" && lastInning && next.score.home !== next.score.away;
+    if (homeAhead || decided) {
+      next.outs = 3;
+      next.final = true;
+      return next;
+    }
+    next.outs = 0;
     if (state.half === "top") {
       next.half = "bottom";
     } else {
@@ -103,6 +102,45 @@ export function applyPlayToState(state: GameState, play: Play): GameState {
   }
 
   return next;
+}
+
+// Where everyone stands once the play is over, before a third out clears the
+// bases. Runners still on base when a half-inning ends were left on base.
+export function runnersAfter(state: GameState, play: Play): GameState["runners"] {
+  const runners = { ...state.runners };
+
+  // Apply runner movements from the AI response
+  for (const r of play.runners) {
+    const fromKey = baseToKey(r.from);
+    const toKey = baseToKey(r.to);
+    const runnerName = r.runner || (fromKey ? runners[fromKey] : null);
+
+    // Clear origin base
+    if (fromKey && runners[fromKey]) {
+      runners[fromKey] = null;
+    }
+
+    // Place on destination base (if not scored/out)
+    if (toKey && r.to !== "home" && r.to !== "out") {
+      runners[toKey] = runnerName || "runner";
+    }
+  }
+
+  // If batter reached base (hit, walk, HBP, error, FC)
+  const reachActions = ["single", "double", "triple", "walk", "hit by pitch", "error", "fielder's choice"];
+  if (play.batter && reachActions.includes(play.action.toLowerCase())) {
+    const dest = actionToBase(play.action.toLowerCase());
+    if (dest) {
+      runners[dest] = play.batter;
+    }
+  }
+
+  // Home run: clear all bases
+  if (play.action.toLowerCase() === "home run") {
+    return { first: null, second: null, third: null };
+  }
+
+  return runners;
 }
 
 // Every runner who crosses the plate counts, not just the ones credited as

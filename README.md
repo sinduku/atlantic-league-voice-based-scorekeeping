@@ -129,10 +129,11 @@ AI_MODEL=llama3
    - where a runner the words didn't mention ended up on a hit or an error
    - whether a grounder with a man on first was a double play, a force at second
      or an out at first
-   - whether runners tagged up on a fly ball to the outfield (a run makes it a
-     sacrifice fly)
-   - who stole, or who moved up on a wild pitch, when more than one runner could
-     have
+   - whether runners tagged up on a fly ball or line drive caught in the outfield
+     (a run makes it a sacrifice fly)
+   - who stole, who was caught stealing or picked off, or who moved up on a wild
+     pitch, when more than one runner could have
+   - where a runner who wasn't forced ended up on a sacrifice bunt
    - who made an error, who batted if there's no lineup, and (optionally) where a
      hit went
    - which play it was, when the AI says the words fit more than one
@@ -175,19 +176,34 @@ in `src/data/extra-players.txt`.
 - ✅ Every play checked against the bases before you confirm it (Enter confirms, Esc rejects)
 - ❓ When the words leave a play open (did the runner score? double play or fielder's
   choice?), the app asks instead of guessing, and you can answer by voice
-- 📊 Live scoreboard and line score (runs by inning, R / H / E) with your team names
+- 📊 Live scoreboard and line score (runs by inning, R / H / E / LOB) with your team names
+- 🧾 Every kind of play a scorer needs: line outs and pop outs apart from fly outs,
+  sacrifice bunts (a plate appearance, not an at bat), and caught stealing and pickoffs
+  (an out that isn't the batter's, so he stays up). "L7", "P4", "CS 2-6" and "picked
+  off" are scored as shorthand when there's only one runner it could be
+- 🏁 The game ends itself: after the top of the last inning if the home team leads,
+  after any later half-inning with a leader, or on a walk-off, where only the winning
+  run counts unless it was a home run. Nine innings, or seven for the second game of a
+  doubleheader; a finished game takes no new plays
 - 🎯 Spray chart placed by direction and how the ball was hit; filled dots are hits,
   hollow are outs, and it filters by team
 - 📋 Lineups for both teams: the batter due up and the pitcher are filled in on every play,
   shorthand included, and a batter out of turn or missing from the lineup is flagged.
   Pinch hitters and pitching changes keep each slot's history
-- ⚾ Pitching lines (IP, BF, H, R, BB, K, HR) with a tap-to-count pitch counter. A run is
-  charged to the pitcher who put that runner on base, even after a pitching change
-- ↩️ Undo the last confirmed play
+- ⚾ Pitching lines (IP, BF, H, R, ER, BB, K, HR) with a tap-to-count pitch counter. A run is
+  charged to the pitcher who put that runner on base, even after a pitching change.
+  Earned runs leave out runners who reached on an error, runs that score on an error or
+  a passed ball, and every run after errors cost the defense its third out. Errors made
+  on some other play (a single plus a throwing error) aren't logged, so an official
+  scorer may differ
+- ↩️ Undo the last confirmed play, or edit or remove any earlier one. Say or type the
+  play again and the whole game is played back from there, so the score, outs, bases
+  and innings after it follow. Later plays that no longer fit (a runner moved off a
+  base that's now empty) are listed with a Fix button rather than rewritten
 - 💾 The game in progress survives a page refresh (Reset starts a new one)
 - 📄 Export a PDF game report: line score, spray charts for both teams, batting lines
   and the full play-by-play
-- 📑 Export CSVs of the play-by-play and the batting stats for Excel or Google Sheets
+- 📑 Export CSVs of the play-by-play, batting and pitching stats for Excel or Google Sheets
 
 ## Database (Supabase)
 

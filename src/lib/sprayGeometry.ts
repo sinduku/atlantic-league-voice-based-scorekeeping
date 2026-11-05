@@ -51,7 +51,7 @@ export const LEGEND = [
   { label: "Bunt", color: HIT_COLORS.bunt },
 ];
 
-const NO_BALL_IN_PLAY = new Set(["strikeout", "walk", "hit by pitch", "stolen base", "wild pitch", "passed ball", "balk"]);
+const NO_BALL_IN_PLAY = new Set(["strikeout", "walk", "hit by pitch", "stolen base", "caught stealing", "pickoff", "wild pitch", "passed ball", "balk"]);
 
 export function isBallInPlay(play: Play): boolean {
   return !NO_BALL_IN_PLAY.has(play.action.toLowerCase()) && !!(play.field_zone || play.hit_location);

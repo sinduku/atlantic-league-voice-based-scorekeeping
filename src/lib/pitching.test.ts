@@ -185,3 +185,46 @@ describe("pitchingLines", () => {
     expect(pitchingLines([])).toEqual([]);
   });
 });
+
+describe("earned runs", () => {
+  const holmes = by("Clay Holmes");
+  const reachedOnError = (batter: string) =>
+    play({ action: "error", batter, pitcher: "Clay Holmes", fielders_involved: ["6"], runners: [{ from: "home", to: "1st", runner: batter }] });
+
+  it("counts a run driven in by hits as earned", () => {
+    const log = playGame([holmes.single("A"), holmes.homer("B", [{ from: "1st", to: "home", runner: "A" }])]);
+    expect(pitchingLines(log)[0]).toMatchObject({ r: 2, er: 2 });
+  });
+
+  it("never counts the run of a runner who reached on an error", () => {
+    const log = playGame([reachedOnError("A"), holmes.homer("B", [{ from: "1st", to: "home", runner: "A" }])]);
+    expect(pitchingLines(log)[0]).toMatchObject({ r: 2, er: 1 });
+  });
+
+  it("doesn't count a run that scores on a passed ball", () => {
+    const log = playGame([
+      holmes.single("A"),
+      play({ action: "stolen base", pitcher: "Clay Holmes", runners: [{ from: "1st", to: "2nd", runner: "A" }] }),
+      play({ action: "wild pitch", pitcher: "Clay Holmes", runners: [{ from: "2nd", to: "3rd", runner: "A" }] }),
+      play({ action: "passed ball", pitcher: "Clay Holmes", runners: [{ from: "3rd", to: "home", runner: "A" }] }),
+    ]);
+    expect(pitchingLines(log)[0]).toMatchObject({ r: 1, er: 0 });
+  });
+
+  it("treats every run after an error would have ended the inning as unearned", () => {
+    // two outs, then an error that should have been the third
+    const log = playGame([
+      holmes.out("A"),
+      holmes.out("B"),
+      reachedOnError("C"),
+      holmes.homer("D", [{ from: "1st", to: "home", runner: "C" }]),
+    ]);
+    expect(pitchingLines(log)[0]).toMatchObject({ r: 2, er: 0 });
+  });
+
+  it("starts each inning clean", () => {
+    const log = playGame([holmes.out("A"), holmes.out("B"), reachedOnError("C"), holmes.out("D"), holmes.homer("E")]);
+    // the home run comes in the bottom half against the other team's pitcher
+    expect(pitchingLines(log).find((l) => l.team === "away")).toMatchObject({ r: 1, er: 1 });
+  });
+});

@@ -65,3 +65,21 @@ export async function deletePlay(gameId: string, playIndex: number): Promise<Sav
     return failure(e);
   }
 }
+
+// rewrites the saved plays from one point on, after a play there was changed
+// or removed. delete and insert rather than update, which the site's database
+// role isn't allowed to do
+export async function replacePlaysFrom(gameId: string, fromIndex: number, plays: Play[]): Promise<SaveResult<null>> {
+  try {
+    const removed = await supabase.from("plays").delete().eq("game_id", gameId).gte("play_index", fromIndex);
+    if (removed.error) return failure(removed.error.message);
+    if (!plays.length) return { ok: true, data: null };
+    const { error } = await supabase.from("plays").insert(
+      plays.map((play, i) => ({ game_id: gameId, play_index: fromIndex + i, data: play as unknown as Json }))
+    );
+    if (error) return failure(error.message);
+    return { ok: true, data: null };
+  } catch (e) {
+    return failure(e);
+  }
+}

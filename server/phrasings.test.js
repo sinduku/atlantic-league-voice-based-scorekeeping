@@ -44,7 +44,7 @@ test("field_zone values are real spray chart zones", () => {
 });
 
 test("plays with a ball in play carry a zone, plays without one do not", () => {
-  const noBallInPlay = ["walk", "hit by pitch", "strikeout", "stolen base", "wild pitch", "passed ball", "balk"];
+  const noBallInPlay = ["walk", "hit by pitch", "strikeout", "stolen base", "caught stealing", "pickoff", "wild pitch", "passed ball", "balk"];
   for (const { transcript, play } of EXAMPLES) {
     const hasZone = play.field_zone !== undefined && play.field_zone !== null;
     if (noBallInPlay.includes(play.action)) {

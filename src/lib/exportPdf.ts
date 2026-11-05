@@ -103,7 +103,7 @@ export function exportPdf(log: LoggedPlay[], state: GameState, info: GameInfo) {
   const doc: Doc = new jsPDF({ unit: "pt", format: "letter" });
   const pageWidth = doc.internal.pageSize.getWidth();
   const { away, home } = info.teamNames;
-  const score = lineScore(log, state);
+  const score = lineScore(log, state, info.innings);
 
   // header
   doc.setFillColor(...NAVY).rect(0, 0, pageWidth, 64, "F");
@@ -111,7 +111,7 @@ export function exportPdf(log: LoggedPlay[], state: GameState, info: GameInfo) {
   doc.text(`${away} ${score.away.runs}, ${home} ${score.home.runs}`, MARGIN, 30);
   doc.setFont("helvetica", "normal").setFontSize(10);
   doc.text(
-    `${info.date.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" })}  ·  ${log.length} plays  ·  through ${half(state)}`,
+    `${info.date.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" })}  ·  ${log.length} plays  ·  ${state.final ? "final" : `through ${half(state)}`}`,
     MARGIN,
     48
   );
@@ -121,14 +121,17 @@ export function exportPdf(log: LoggedPlay[], state: GameState, info: GameInfo) {
   const inningCols = Array.from({ length: score.innings }, (_, i) => String(i + 1));
   const lineRow = (name: string, line: typeof score.away) => [
     name,
-    ...line.runsByInning.map((r) => (r === null ? "" : String(r))),
+    ...line.runsByInning.map((r, i) =>
+      r === null ? (state.final && line === score.home && state.half === "top" && i + 1 === state.inning ? "X" : "") : String(r)
+    ),
     String(line.runs),
     String(line.hits),
     String(line.errors),
+    String(line.lob),
   ];
   autoTable(doc, {
     startY: 84,
-    head: [["", ...inningCols, "R", "H", "E"]],
+    head: [["", ...inningCols, "R", "H", "E", "LOB"]],
     body: [lineRow(away, score.away), lineRow(home, score.home)],
     theme: "grid",
     styles: { fontSize: 10, halign: "center", cellPadding: 4 },
@@ -192,10 +195,10 @@ export function exportPdf(log: LoggedPlay[], state: GameState, info: GameInfo) {
     const rows = pitching.filter((p) => p.team === team);
     autoTable(doc, {
       startY: y,
-      head: [[`${info.teamNames[team]} pitching`, "IP", "BF", "H", "R", "BB", "HBP", "K", "HR", "Pitches"]],
+      head: [[`${info.teamNames[team]} pitching`, "IP", "BF", "H", "R", "ER", "BB", "HBP", "K", "HR", "Pitches"]],
       body: rows.length
-        ? rows.map((p) => [p.name, inningsPitched(p.outs), p.bf, p.h, p.r, p.bb, p.hbp, p.k, p.hr, p.pitches ?? ""])
-        : [["No pitching recorded yet", "", "", "", "", "", "", "", "", ""]],
+        ? rows.map((p) => [p.name, inningsPitched(p.outs), p.bf, p.h, p.r, p.er, p.bb, p.hbp, p.k, p.hr, p.pitches ?? ""])
+        : [["No pitching recorded yet", "", "", "", "", "", "", "", "", "", ""]],
       theme: "striped",
       styles: { fontSize: 9, halign: "center", cellPadding: 3 },
       headStyles: { fillColor: NAVY },
@@ -204,10 +207,16 @@ export function exportPdf(log: LoggedPlay[], state: GameState, info: GameInfo) {
     });
     y = (doc.lastAutoTable?.finalY ?? y) + 14;
   }
-  // earned runs depend on the official scorer's call on errors, which the app
-  // doesn't make, so say what R means rather than let it pass for ER
+  // earned runs need the official scorer's call on errors, which the app only
+  // approximates, so say how ER was worked out
   doc.setFont("helvetica", "italic").setFontSize(8).setTextColor(110);
-  doc.text("R is all runs allowed, charged to the pitcher who put each runner on base. Pitches are tap-counted.", MARGIN, y);
+  doc.text(
+    "R is charged to the pitcher who put each runner on base. ER leaves out runners who reached on an error, runs on errors and passed balls, and runs after errors cost a third out; the official scorer may differ. Pitches are tap-counted.",
+    MARGIN,
+    y,
+    { maxWidth: pageWidth - MARGIN * 2 }
+  );
+  y += 10;
   y += 10;
 
   // play-by-play

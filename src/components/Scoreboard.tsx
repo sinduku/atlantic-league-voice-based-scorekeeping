@@ -22,9 +22,15 @@ export function Scoreboard({ state, teamNames = { away: "Away", home: "Home" }, 
         {/* Inning */}
         <div className="text-center">
           <span className="text-xs uppercase tracking-wider text-muted-foreground block">Inning</span>
-          <span className="text-2xl font-bold text-foreground">
-            {state.half === "top" ? "▲" : "▼"} {state.inning}
-          </span>
+          {state.final ? (
+            <span className="text-2xl font-bold text-foreground">
+              Final{state.inning !== 9 ? <span className="text-base font-semibold">/{state.inning}</span> : null}
+            </span>
+          ) : (
+            <span className="text-2xl font-bold text-foreground">
+              {state.half === "top" ? "▲" : "▼"} {state.inning}
+            </span>
+          )}
         </div>
 
         {/* Diamond */}

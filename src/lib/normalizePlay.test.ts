@@ -171,16 +171,23 @@ describe("normalizePlay rejection and fallback", () => {
 describe("individual normalizers", () => {
   it.each([
     ["groundout", null, "ground out"],
-    ["Line Out", null, "fly out"],
+    ["Line Out", null, "line out"],
     ["Fielders-Choice", null, "fielder's choice"],
     ["HBP", null, "hit by pitch"],
-    ["triple play", "line drive", "fly out"],
+    ["triple play", "line drive", "line out"],
     ["double play", "ground ball", "ground out"],
     // seen from the live edge function
     ["ground into double play", "ground ball", "ground out"],
     ["Grounded into a double play", null, "ground out"],
-    ["lined into a triple play", "line drive", "fly out"],
+    ["lined into a triple play", "line drive", "line out"],
     ["GIDP", null, "ground out"],
+    ["picked off", null, "pickoff"],
+    ["CS", null, "caught stealing"],
+    ["sac bunt", null, "sacrifice bunt"],
+    ["popped up", null, "pop out"],
+    ["fly out", "line drive", "line out"],
+    ["fly out", "pop up", "pop out"],
+    ["fly out", "fly ball", "fly out"],
     ["something new", null, "something new"],
   ])("action %s (%s) -> %s", (raw, hitType, expected) => {
     expect(normalizeAction(raw, hitType)).toBe(expected);

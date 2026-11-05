@@ -159,7 +159,10 @@ export function applyLineup(
   state: GameState,
   lineups: Lineups,
   dueUp: number,
-  teamNames: Record<Team, string>
+  teamNames: Record<Team, string>,
+  // when an earlier play is scored again: who was batting and pitching then,
+  // since the lineups on screen may have changed since
+  history?: { batter?: string | null; pitcher?: string | null; slot?: number | null }
 ): LineupCheck {
   const batting = battingTeam(state.half);
   const fielding = otherTeam(batting);
@@ -167,7 +170,7 @@ export function applyLineup(
   const next: Play = { ...play };
   let slot: number | null = null;
 
-  const pitcher = currentPitcher(lineups[fielding]);
+  const pitcher = history ? history.pitcher?.trim() || null : currentPitcher(lineups[fielding]);
   if (pitcher) {
     if (!next.pitcher?.trim() || samePlayer(next.pitcher, pitcher)) {
       next.pitcher = pitcher;
@@ -182,7 +185,10 @@ export function applyLineup(
   if (hasBattingOrder(lineup) && isPlateAppearance(next.action)) {
     const dueName = currentBatter(lineup, dueUp)!;
     const named = next.batter?.trim();
-    if (!named) {
+    if (!named && history?.batter?.trim()) {
+      next.batter = history.batter.trim();
+      slot = history.slot ?? dueUp;
+    } else if (!named) {
       next.batter = dueName;
       slot = dueUp;
     } else {
@@ -195,7 +201,8 @@ export function applyLineup(
       } else {
         next.batter = match.name;
         slot = match.slot;
-        if (!match.current) {
+        // a player since replaced was still in the game back then
+        if (!match.current && !history) {
           warnings.push(`${match.name} was replaced by ${currentBatter(lineup, match.slot)} and is out of the game.`);
         } else if (match.slot !== dueUp) {
           warnings.push(

@@ -35,8 +35,9 @@ describe("parseShorthand", () => {
     ["rung up", "strikeout", 1],
     ["punched out", "strikeout", 1],
     ["F8", "fly out", 1],
-    ["L7", "fly out", 1],
-    ["P4", "fly out", 1],
+    ["L7", "line out", 1],
+    ["P4", "pop out", 1],
+    ["popped out to four", "pop out", 1],
     ["fly out to eight", "fly out", 1],
     ["U3", "ground out", 1],
     ["6-3", "ground out", 1],
@@ -53,6 +54,26 @@ describe("parseShorthand", () => {
     const play = parseShorthand(input, empty);
     expect(play?.action).toBe(action);
     expect(play?.outs_recorded).toBe(outs);
+  });
+
+  it("puts the only runner on out when he's caught stealing or picked off", () => {
+    const onFirst: GameState = { ...empty, runners: { first: "Soto", second: null, third: null } };
+    const cs = parseShorthand("CS 2-6", onFirst)!;
+    expect(cs.action).toBe("caught stealing");
+    expect(cs.runners).toEqual([{ from: "1st", to: "out", runner: "Soto" }]);
+    expect(cs.outs_recorded).toBe(1);
+    expect(cs.fielders_involved).toEqual(["2", "6"]);
+    expect(cs.description).toBe("Soto caught stealing second");
+
+    const po = parseShorthand("picked off", { ...empty, runners: { first: null, second: "Lindor", third: null } })!;
+    expect(po.action).toBe("pickoff");
+    expect(po.runners).toEqual([{ from: "2nd", to: "out", runner: "Lindor" }]);
+    expect(po.fielders_involved).toEqual(["1", "6"]);
+  });
+
+  it("leaves caught stealing to the model when it isn't clear who it was", () => {
+    expect(parseShorthand("caught stealing", empty)).toBeNull();
+    expect(parseShorthand("CS", { ...empty, runners: { first: "A", second: "B", third: null } })).toBeNull();
   });
 
   it("leaves anything with more in it to the model", () => {

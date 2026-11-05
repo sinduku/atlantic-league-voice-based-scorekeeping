@@ -291,3 +291,25 @@ describe("ordinal", () => {
     expect(ordinal(n)).toBe(s);
   });
 });
+
+describe("scoring an earlier play again", () => {
+  it("keeps who was batting and pitching then, even after a substitution and a pitching change", () => {
+    let cards = lineups();
+    cards = { away: substitute(cards.away, 0, "Pinch Hitter"), home: changePitcher(cards.home, "Edwin Díaz") };
+    const redo = applyLineup(single(), INITIAL_GAME_STATE, cards, 0, TEAMS, { batter: "Juan Soto", pitcher: "Clay Holmes", slot: 0 });
+    expect(redo.play.batter).toBe("Juan Soto");
+    expect(redo.play.pitcher).toBe("Clay Holmes");
+    expect(redo.slot).toBe(0);
+    expect(redo.warnings).toEqual([]);
+  });
+
+  it("still takes a batter the scorer names instead", () => {
+    const redo = applyLineup(play({ ...single(), batter: "Lindor" }), INITIAL_GAME_STATE, lineups(), 0, TEAMS, {
+      batter: "Juan Soto",
+      pitcher: "Clay Holmes",
+      slot: 0,
+    });
+    expect(redo.play.batter).toBe("Francisco Lindor");
+    expect(redo.slot).toBe(1);
+  });
+});

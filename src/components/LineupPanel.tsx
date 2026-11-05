@@ -74,7 +74,7 @@ export function LineupPanel(props: LineupPanelProps) {
                 <p className="font-semibold truncate">{pitcher}</p>
                 <p className="text-xs text-muted-foreground tabular-nums">
                   {line
-                    ? `${inningsPitched(line.outs)} IP · ${line.h} H · ${line.r} R · ${line.bb} BB · ${line.k} K`
+                    ? `${inningsPitched(line.outs)} IP · ${line.h} H · ${line.r} R · ${line.er} ER · ${line.bb} BB · ${line.k} K`
                     : "No batters faced yet"}
                 </p>
               </div>

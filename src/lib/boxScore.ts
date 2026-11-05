@@ -1,4 +1,4 @@
-import type { GameState, Play } from "@/types/game";
+import { REGULATION_INNINGS, runnersAfter, type GameState, type Play } from "@/types/game";
 
 // Builds the line score and batting lines from the confirmed plays. Each play
 // is logged with the game state before and after it, so runs come from the
@@ -22,6 +22,8 @@ export interface TeamLine {
   runs: number;
   hits: number;
   errors: number;
+  // runners still on base when each of the team's half-innings ended
+  lob: number;
 }
 
 export interface LineScore {
@@ -47,10 +49,12 @@ export interface BattingLine {
 
 export const HIT_ACTIONS = new Set(["single", "double", "triple", "home run"]);
 
-// these happen between pitches and aren't anyone's plate appearance
-const NOT_A_PLATE_APPEARANCE = new Set(["stolen base", "wild pitch", "passed ball", "balk"]);
+// these happen between pitches and aren't anyone's plate appearance; a
+// runner caught stealing or picked off for the third out leaves the batter to
+// lead off the next inning
+const NOT_A_PLATE_APPEARANCE = new Set(["stolen base", "wild pitch", "passed ball", "balk", "caught stealing", "pickoff"]);
 // a plate appearance that doesn't count as an at bat
-const NOT_AN_AT_BAT = new Set(["walk", "hit by pitch", "sacrifice fly"]);
+const NOT_AN_AT_BAT = new Set(["walk", "hit by pitch", "sacrifice fly", "sacrifice bunt"]);
 
 export const isPlateAppearance = (action: string) => !NOT_A_PLATE_APPEARANCE.has(action.toLowerCase());
 
@@ -61,9 +65,9 @@ export const battingTeam = (half: GameState["half"]): Team => (half === "top" ? 
 export const teamOf = (play: Pick<Play, "half">): Team => (play.half === "bottom" ? "home" : "away");
 const fieldingTeam = (half: GameState["half"]): Team => (half === "top" ? "home" : "away");
 
-export function lineScore(log: LoggedPlay[], current: GameState): LineScore {
-  const innings = Math.max(9, current.inning, ...log.map((e) => e.before.inning));
-  const empty = (): TeamLine => ({ runsByInning: new Array(innings).fill(null), runs: 0, hits: 0, errors: 0 });
+export function lineScore(log: LoggedPlay[], current: GameState, scheduled: number = REGULATION_INNINGS): LineScore {
+  const innings = Math.max(scheduled, current.inning, ...log.map((e) => e.before.inning));
+  const empty = (): TeamLine => ({ runsByInning: new Array(innings).fill(null), runs: 0, hits: 0, errors: 0, lob: 0 });
   const lines = { away: empty(), home: empty() };
 
   // an inning counts as batted once its half has started
@@ -74,6 +78,10 @@ export function lineScore(log: LoggedPlay[], current: GameState): LineScore {
 
   for (const { play, before, after } of log) {
     const team = battingTeam(before.half);
+    if (endsHalf(before, after)) {
+      const stranded = runnersAfter(before, play);
+      lines[team].lob += [stranded.first, stranded.second, stranded.third].filter(Boolean).length;
+    }
     const runs = after.score[team] - before.score[team];
     const index = before.inning - 1;
     lines[team].runsByInning[index] = (lines[team].runsByInning[index] ?? 0) + runs;
@@ -85,6 +93,10 @@ export function lineScore(log: LoggedPlay[], current: GameState): LineScore {
 
   return { innings, ...lines };
 }
+
+// the play that made the third out, or ended the game
+export const endsHalf = (before: GameState, after: GameState) =>
+  !!after.final || after.half !== before.half || after.inning !== before.inning;
 
 export function battingLines(log: LoggedPlay[]): BattingLine[] {
   const lines = new Map<string, BattingLine>();

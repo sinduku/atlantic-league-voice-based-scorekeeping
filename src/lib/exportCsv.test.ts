@@ -58,11 +58,11 @@ describe("pitching csv", () => {
     };
     const pitched = [{ play: k, before: INITIAL_GAME_STATE, after: applyPlayToState(INITIAL_GAME_STATE, k) }];
     const csv = pitchingCsv(pitched, { ...info, pitchCounts: { "home:clay holmes": 6 } }).split("\r\n");
-    expect(csv[0]).toBe("Team,Pitcher,IP,BF,H,R,BB,HBP,K,HR,Pitches");
-    expect(csv[1]).toBe("York Revolution,Clay Holmes,0.1,1,0,0,0,0,1,0,6");
+    expect(csv[0]).toBe("Team,Pitcher,IP,BF,H,R,ER,BB,HBP,K,HR,Pitches");
+    expect(csv[1]).toBe("York Revolution,Clay Holmes,0.1,1,0,0,0,0,0,1,0,6");
   });
 
   it("leaves pitches blank when nobody counted them", () => {
-    expect(pitchingCsv(log, info).split("\r\n")[1]).toBe("York Revolution,Unnamed pitcher,0.0,1,1,0,0,0,0,0,");
+    expect(pitchingCsv(log, info).split("\r\n")[1]).toBe("York Revolution,Unnamed pitcher,0.0,1,1,0,0,0,0,0,0,");
   });
 });

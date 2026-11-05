@@ -6,8 +6,17 @@ import { HIT_ACTIONS, battingTeam, isPlateAppearance, type LoggedPlay, type Team
 //
 // Runs follow the inherited-runner rule: a run belongs to the pitcher who put
 // that runner on base, even if he has been relieved by the time the runner
-// scores. Earned runs need an official scorer's judgment on errors, so R here
-// is all runs.
+// scores.
+//
+// Earned runs follow the parts of rule 9.16 the log can see, and an official
+// scorer's judgment can still differ:
+// - a runner who reached on an error never scores an earned run
+// - a run that scores on an error or a passed ball is unearned
+// - each error that let the batter reach counts as the out it should have
+//   been, and once those and the real outs make three, every later run in the
+//   inning is unearned
+// Errors made on some other play (a single plus a throwing error, say) aren't
+// logged as errors, so they can't be taken out.
 
 export interface PitchingLine {
   name: string;
@@ -16,6 +25,8 @@ export interface PitchingLine {
   bf: number;
   h: number;
   r: number;
+  // earned runs, as far as the log can tell (see above)
+  er: number;
   bb: number;
   hbp: number;
   k: number;
@@ -40,7 +51,7 @@ export function pitchingLines(log: LoggedPlay[], pitchCounts: Record<string, num
   const lineFor = (team: Team, name: string) => {
     const key = pitcherKey(team, name);
     if (!lines.has(key)) {
-      lines.set(key, { name, team, outs: 0, bf: 0, h: 0, r: 0, bb: 0, hbp: 0, k: 0, hr: 0, pitches: pitchCounts[key] ?? null });
+      lines.set(key, { name, team, outs: 0, bf: 0, h: 0, r: 0, er: 0, bb: 0, hbp: 0, k: 0, hr: 0, pitches: pitchCounts[key] ?? null });
       order.push(key);
     }
     return key;
@@ -48,6 +59,9 @@ export function pitchingLines(log: LoggedPlay[], pitchCounts: Record<string, num
 
   // runner name -> the pitcher who let him on, for the half-inning in progress
   let responsible = new Map<string, string>();
+  // runners who reached on an error, and the outs errors cost the defense
+  let reachedOnError = new Set<string>();
+  let errorOuts = 0;
   let half = "";
 
   for (const { play, before, after } of log) {
@@ -55,6 +69,8 @@ export function pitchingLines(log: LoggedPlay[], pitchCounts: Record<string, num
     if (thisHalf !== half) {
       // the bases are empty at the start of every half-inning
       responsible = new Map();
+      reachedOnError = new Set();
+      errorOuts = 0;
       half = thisHalf;
     }
 
@@ -76,12 +92,21 @@ export function pitchingLines(log: LoggedPlay[], pitchCounts: Record<string, num
     // charge each run to whoever let that runner on; the score is the
     // authority on how many runs there were, the runner list on whose they were
     const runs = Math.max(0, after.score[batting] - before.score[batting]);
+    // the inning would already be over had the errors been outs
+    const pastThreeOuts = before.outs + errorOuts >= 3;
+    const unearnedPlay = action === "error" || action === "passed ball";
+    const charge = (owner: string, runner: string | null) => {
+      const line = lines.get(owner)!;
+      line.r++;
+      const tainted = !!runner && reachedOnError.has(runner.toLowerCase());
+      if (!tainted && !unearnedPlay && !pastThreeOuts) line.er++;
+    };
     let charged = 0;
     for (const r of play.runners) {
       if (charged >= runs || r.to.toLowerCase() !== "home") continue;
       const runner = r.runner?.trim() || (r.from.toLowerCase() === "home" ? batter : null);
       const owner = (runner && responsible.get(runner.toLowerCase())) || key;
-      lines.get(owner)!.r++;
+      charge(owner, runner);
       charged++;
     }
     // runs the play didn't put a runner to, like a home run that only lists
@@ -97,11 +122,16 @@ export function pitchingLines(log: LoggedPlay[], pitchCounts: Record<string, num
     for (const [base, runner] of unlisted) {
       if (charged >= runs || !runner || mentioned.has(base)) continue;
       const owner = responsible.get(runner.toLowerCase()) || key;
-      lines.get(owner)!.r++;
+      charge(owner, runner);
       responsible.delete(runner.toLowerCase());
       charged++;
     }
-    line.r += runs - charged;
+    for (; charged < runs; charged++) charge(key, null);
+
+    if (action === "error") {
+      errorOuts++;
+      if (batter) reachedOnError.add(batter.toLowerCase());
+    }
 
     for (const r of play.runners) {
       const to = r.to.toLowerCase();

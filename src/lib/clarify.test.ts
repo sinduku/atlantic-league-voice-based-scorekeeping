@@ -400,3 +400,67 @@ describe("describePlay", () => {
     );
   });
 });
+
+describe("caught stealing, pickoffs, sacrifice bunts, line outs and pop outs", () => {
+  it("asks who was caught stealing when two runners could have been", () => {
+    const cs = play({ action: "caught stealing", batter: null, runners: [{ from: "1st", to: "out", runner: "Soto" }], outs_recorded: 1 });
+    const qs = openQuestions(cs, ctx(state({ first: "Soto", second: "Lindor" }), "caught stealing"));
+    expect(ids(qs)).toEqual(["runner-out"]);
+    expect(qs[0].prompt).toBe("Who was caught stealing?");
+    const lindor = option(qs[0], "2nd").play;
+    expect(lindor.runners).toEqual([{ from: "2nd", to: "out", runner: "Lindor" }]);
+    expect(lindor.outs_recorded).toBe(1);
+  });
+
+  it("doesn't ask when the runner is named or he's the only one on", () => {
+    const po = play({ action: "pickoff", runners: [{ from: "2nd", to: "out", runner: "Lindor" }], outs_recorded: 1 });
+    expect(openQuestions(po, ctx(state({ first: "Soto", second: "Lindor" }), "Lindor picked off second"))).toEqual([]);
+    expect(openQuestions(po, ctx(state({ second: "Lindor" }), "picked off"))).toEqual([]);
+  });
+
+  it("never asks who batted on a caught stealing", () => {
+    const cs = play({ action: "caught stealing", batter: null, runners: [{ from: "1st", to: "out", runner: "Soto" }], outs_recorded: 1 });
+    expect(openQuestions(cs, ctx(state({ first: "Soto" }), "CS")).map((q) => q.id)).not.toContain("batter");
+  });
+
+  it("takes a forced runner moving up a base on a sacrifice bunt as given", () => {
+    const sac = play({
+      action: "sacrifice bunt",
+      runners: [
+        { from: "1st", to: "2nd", runner: "Soto" },
+        { from: "home", to: "out", runner: "Batter" },
+      ],
+      outs_recorded: 1,
+      hit_location: "pitcher",
+    });
+    expect(openQuestions(sac, ctx(state({ first: "Soto" }), "sac bunt"))).toEqual([]);
+  });
+
+  it("asks about a runner who wasn't forced on a sacrifice bunt, without offering an out", () => {
+    const sac = play({ action: "sacrifice bunt", runners: [{ from: "home", to: "out", runner: "Batter" }], outs_recorded: 1, hit_location: "pitcher" });
+    const qs = openQuestions(sac, ctx(state({ second: "Lindor" }), "sac bunt"));
+    expect(ids(qs)).toEqual(["runner:2nd"]);
+    expect(qs[0].options.map((o) => o.id)).not.toContain("out");
+    expect(qs[0].options.find((o) => o.likely)?.label).toBe("Went to 3rd");
+  });
+
+  it("lets a pop out hold the runners without asking", () => {
+    const pop = play({ action: "pop out", runners: [{ from: "home", to: "out" }], outs_recorded: 1, hit_location: "left field" });
+    expect(openQuestions(pop, ctx(state({ third: "Rios" }), "popped up to left"))).toEqual([]);
+  });
+
+  it("asks about tagging up on a line out to the outfield", () => {
+    const liner = play({ action: "line out", runners: [{ from: "home", to: "out" }], outs_recorded: 1, fielders_involved: ["9"], hit_location: "right field" });
+    const qs = openQuestions(liner, ctx(state({ third: "Rios" }), "lined out to right"));
+    expect(ids(qs)).toEqual(["runner:3rd"]);
+    expect(option(qs[0], "home").play.action).toBe("sacrifice fly");
+  });
+
+  it("describes the new plays in plain words", () => {
+    const s = state({ first: "Soto" });
+    expect(describePlay(play({ action: "caught stealing", runners: [{ from: "1st", to: "out", runner: "Soto" }], outs_recorded: 1 }), s)).toBe(
+      "Caught stealing. Soto out."
+    );
+    expect(describePlay(play({ action: "line out", batter: "Kim", hit_location: "short" }), INITIAL_GAME_STATE)).toBe("Kim lines out to short.");
+  });
+});

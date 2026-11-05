@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Download, FileSpreadsheet, FileText, Keyboard, RotateCcw, Trash2, Undo2 } from "lucide-react";
+import { Download, FileSpreadsheet, FileText, Keyboard, Pencil, RotateCcw, Trash2, Undo2, X } from "lucide-react";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
 import { PlayCard } from "@/components/PlayCard";
 import { SprayChart } from "@/components/SprayChart";
@@ -28,9 +28,10 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { createGame, deletePlay, savePlay, type SaveResult } from "@/lib/persistence";
+import { createGame, deletePlay, replacePlaysFrom, savePlay, type SaveResult } from "@/lib/persistence";
+import { replayLog, withEdit, type ReplayProblem } from "@/lib/replay";
 import { normalizePlay } from "@/lib/normalizePlay";
-import { describePlay, isSkip, matchAnswer, openQuestions, type ClarifyOption } from "@/lib/clarify";
+import { describePlay, describeSituation, isSkip, matchAnswer, openQuestions, type ClarifyOption } from "@/lib/clarify";
 import { ClarifyPanel } from "@/components/ClarifyPanel";
 import { parseShorthand } from "@/lib/shorthand";
 import { buildNameIndex, correctNames, loadPlayerNames } from "@/lib/correctNames";
@@ -51,7 +52,7 @@ import {
 } from "@/lib/lineup";
 import { pitcherKey, pitchingLines } from "@/lib/pitching";
 import { battingCsv, downloadCsv, fileBaseName, pitchingCsv, playByPlayCsv, type GameInfo } from "@/lib/exportCsv";
-import { type Play, type GameState, INITIAL_GAME_STATE, applyPlayToState } from "@/types/game";
+import { type Play, type GameState, INITIAL_GAME_STATE, REGULATION_INNINGS, applyPlayToState } from "@/types/game";
 
 // VITE_PARSE_URL points straight at a deployed endpoint - the GitHub Pages
 // build uses the Supabase edge function, since a static site cannot hold the
@@ -87,6 +88,8 @@ interface SavedGame {
   lineups?: Lineups;
   markedUp?: Record<Team, number | null>;
   pitchCounts?: Record<string, number>;
+  // scheduled innings; missing means nine
+  innings?: number;
 }
 
 function loadSavedGame(): SavedGame | null {
@@ -133,6 +136,11 @@ const Index = () => {
   } | null>(null);
   // questions about the play under review that have been answered or skipped
   const [resolved, setResolved] = useState<string[]>([]);
+  const [innings, setInnings] = useState<number>(restored?.innings ?? REGULATION_INNINGS);
+  // the confirmed play being scored again, by its place in the log
+  const [editing, setEditing] = useState<number | null>(null);
+  // later plays that stopped adding up after an edit
+  const [problems, setProblems] = useState<ReplayProblem[]>([]);
 
   const confirmedPlays = log.map((e) => e.play);
 
@@ -146,6 +154,16 @@ const Index = () => {
     home: dueUpSlot("home", log, markedUp.home),
   };
   const pitching = useMemo(() => pitchingLines(log, pitchCounts), [log, pitchCounts]);
+
+  // the situation a play under review happened in: now, or before the play
+  // being scored again
+  const editedEntry = editing != null ? log[editing] ?? null : null;
+  const reviewState = editedEntry?.before ?? gameState;
+  const reviewLog = editing != null ? log.slice(0, editing) : log;
+  const reviewBatting = battingTeam(reviewState.half);
+  const reviewDueUp = editedEntry
+    ? editedEntry.slot ?? dueUpSlot(reviewBatting, reviewLog)
+    : dueUp[batting];
   const atBat = hasBattingOrder(lineups[batting]) ? currentBatter(lineups[batting], dueUp[batting]) : null;
   const pitcherNow = currentPitcher(lineups[fielding]);
 
@@ -186,12 +204,13 @@ const Index = () => {
         lineups,
         markedUp,
         pitchCounts,
+        innings,
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
     } catch {
       // private windows can refuse storage; the game still works, it just won't survive a refresh
     }
-  }, [log, gameState, teamNames, startedAt, savedCount, lineups, markedUp, pitchCounts]);
+  }, [log, gameState, teamNames, startedAt, savedCount, lineups, markedUp, pitchCounts, innings]);
 
   const ensureGame = async () => {
     if (!gameRequest.current) {
@@ -212,22 +231,22 @@ const Index = () => {
   // most recent first
   const batterSuggestions = useMemo(() => {
     const names: string[] = [];
-    for (let i = log.length - 1; i >= 0; i--) {
-      const { play, before } = log[i];
+    for (let i = reviewLog.length - 1; i >= 0; i--) {
+      const { play, before } = reviewLog[i];
       const name = play.batter?.trim();
-      if (battingTeam(before.half) === batting && name && !names.some((n) => n.toLowerCase() === name.toLowerCase())) names.push(name);
+      if (battingTeam(before.half) === reviewBatting && name && !names.some((n) => n.toLowerCase() === name.toLowerCase())) names.push(name);
     }
     return names;
-  }, [log, batting]);
+  }, [reviewLog, reviewBatting]);
 
   // what the words left open about the play under review, worked out again
   // after every answer since one answer can change what the next should offer
   const questions = useMemo(
     () =>
       currentPlay && reviewBase
-        ? openQuestions(currentPlay, { state: gameState, transcript: reviewBase.transcript, resolved, batterSuggestions })
+        ? openQuestions(currentPlay, { state: reviewState, transcript: reviewBase.transcript, resolved, batterSuggestions })
         : [],
-    [currentPlay, reviewBase, gameState, resolved, batterSuggestions]
+    [currentPlay, reviewBase, reviewState, resolved, batterSuggestions]
   );
   const question = questions[0] ?? null;
   const mustAnswer = questions.some((q) => q.required);
@@ -235,8 +254,11 @@ const Index = () => {
   const showPlay = (play: Play, info: ParseInfo, transcript: string, alreadyResolved: string[] = []) => {
     // the lineup fills the batter and pitcher first, so the base check sees
     // the real names
-    const lined = applyLineup(play, gameState, lineups, dueUp[batting], shownTeams);
-    const checked = checkPlay(lined.play, gameState);
+    const history = editedEntry
+      ? { batter: editedEntry.play.batter, pitcher: editedEntry.play.pitcher, slot: editedEntry.slot }
+      : undefined;
+    const lined = applyLineup(play, reviewState, lineups, reviewDueUp, shownTeams, history);
+    const checked = checkPlay(lined.play, reviewState);
     const allWarnings = [...lined.warnings, ...checked.warnings];
     setReviewBase({ play: checked.play, lineupWarnings: lined.warnings, transcript, resolved: alreadyResolved });
     setResolved(alreadyResolved);
@@ -265,7 +287,7 @@ const Index = () => {
   // fix or cause an outs mismatch
   const settle = (next: Play, ids: string[]) => {
     // the parser's description may state what the scorer just contradicted
-    const rechecked = checkPlay({ ...next, description: describePlay(next, gameState) }, gameState);
+    const rechecked = checkPlay({ ...next, description: describePlay(next, reviewState) }, reviewState);
     setCurrentPlay(rechecked.play);
     setWarnings([...(reviewBase?.lineupWarnings ?? []), ...rechecked.warnings]);
     setResolved((prev) => [...prev, ...ids]);
@@ -277,7 +299,7 @@ const Index = () => {
 
   const handleStartOver = () => {
     if (!reviewBase) return;
-    const rechecked = checkPlay(reviewBase.play, gameState);
+    const rechecked = checkPlay(reviewBase.play, reviewState);
     setCurrentPlay(rechecked.play);
     setWarnings([...reviewBase.lineupWarnings, ...rechecked.warnings]);
     setResolved(reviewBase.resolved);
@@ -299,6 +321,10 @@ const Index = () => {
       handleAnswerText(rawTranscript);
       return;
     }
+    if (gameState.final && editing == null) {
+      toast("The game is over. Undo or edit a play to change it, or start a new game.");
+      return;
+    }
     const started = performance.now();
     const transcript = correctNames(rawTranscript, nameIndex);
     setLastTranscript(transcript);
@@ -309,7 +335,7 @@ const Index = () => {
     setParseInfo(null);
 
     // plain shorthand ("6-3", "K looking") is scored right here, no network
-    const local = parseShorthand(transcript, gameState);
+    const local = parseShorthand(transcript, reviewState);
     if (local) {
       showPlay(local, { source: "shorthand", ms: Math.round(performance.now() - started) }, transcript, opts.resolved);
       return;
@@ -322,8 +348,8 @@ const Index = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           transcript,
-          gameState,
-          context: buildParseContext(log, gameState, teamNames, { lineups, dueUp: dueUp[batting] }),
+          gameState: reviewState,
+          context: buildParseContext(reviewLog, reviewState, teamNames, { lineups, dueUp: reviewDueUp }),
         }),
         signal: AbortSignal.timeout(PARSE_TIMEOUT_MS),
       });
@@ -378,9 +404,16 @@ const Index = () => {
     // network; persistence catches up behind it. the readings the scorer
     // already chose between aren't part of the record
     const play: Play = { ...currentPlay, alternatives: null };
+    if (editing != null) {
+      applyEdit(editing, { play, slot: pendingSlot }, "Play updated");
+      setCurrentPlay(null);
+      setWarnings([]);
+      setLastTranscript("");
+      return;
+    }
     const playIndex = log.length;
     const before = gameState;
-    const after = applyPlayToState(before, play);
+    const after = applyPlayToState(before, play, innings);
     const slot = pendingSlot;
 
     setLog((prev) => [...prev, { play, before, after, slot }]);
@@ -388,7 +421,13 @@ const Index = () => {
     setPendingSlot(null);
     // a hand-marked batter only stands until that team's next plate appearance
     if (slot != null) setMarkedUp((prev) => ({ ...prev, [battingTeam(before.half)]: null }));
-    toast.success(after.inning !== before.inning || after.half !== before.half ? `Play confirmed. Side retired, ${inningLabel(after)}.` : "Play confirmed!");
+    toast.success(
+      after.final
+        ? `Ballgame. Final: ${shownTeams.away} ${after.score.away}, ${shownTeams.home} ${after.score.home}.`
+        : after.inning !== before.inning || after.half !== before.half
+          ? `Play confirmed. Side retired, ${inningLabel(after)}.`
+          : "Play confirmed!"
+    );
     setCurrentPlay(null);
     setWarnings([]);
     setLastTranscript("");
@@ -414,7 +453,65 @@ const Index = () => {
     setResolved([]);
     setWarnings([]);
     setPendingSlot(null);
-    toast("Play rejected. Try recording again.");
+    toast(editing != null ? "Kept the play as it was. Say it again, or cancel the edit." : "Play rejected. Try recording again.");
+  };
+
+  // plays the game again with one play changed or removed, so everything
+  // after it (score, outs, bases, innings) follows from the correction
+  const applyEdit = async (index: number, change: { play: Play; slot: number | null } | null, message: string) => {
+    const result = replayLog(withEdit(log, index, change), innings);
+    setLog(result.log);
+    setGameState(result.state);
+    setProblems(result.problems);
+    setEditing(null);
+    setReviewBase(null);
+    setResolved([]);
+    setPendingSlot(null);
+    if (result.problems.length) {
+      toast.warning(`${message}. ${result.problems.length} later ${result.problems.length === 1 ? "play no longer fits" : "plays no longer fit"}; see the list above the plays.`);
+    } else {
+      toast.success(`${message}. The score and bases were worked out again.`);
+    }
+
+    if (gameId.current) {
+      const saved = await replacePlaysFrom(gameId.current, index, result.log.slice(index).map((e) => e.play));
+      if ("error" in saved) setSaveError(saved.error);
+      else {
+        setSavedCount(result.log.length);
+        setSaveError(null);
+      }
+    }
+  };
+
+  const handleEdit = (index: number) => {
+    setEditing(index);
+    setCurrentPlay(null);
+    setReviewBase(null);
+    setResolved([]);
+    setWarnings([]);
+    setPendingSlot(null);
+    setLastTranscript("");
+    toast(`Say or type play #${index + 1} the way it really happened.`);
+  };
+
+  const handleCancelEdit = () => {
+    setEditing(null);
+    setCurrentPlay(null);
+    setReviewBase(null);
+    setResolved([]);
+    setWarnings([]);
+    setPendingSlot(null);
+  };
+
+  const handleDelete = (index: number) => applyEdit(index, null, `Removed play #${index + 1}`);
+
+  const handleInnings = (value: number) => {
+    setInnings(value);
+    // a game that was over may not be, or one in progress may now be over
+    const result = replayLog(log, value);
+    setLog(result.log);
+    setGameState(result.state);
+    setProblems(result.problems);
   };
 
   const handleUndo = async () => {
@@ -423,6 +520,7 @@ const Index = () => {
     const playIndex = log.length - 1;
     setLog((prev) => prev.slice(0, -1));
     setGameState(last.before);
+    setProblems((prev) => prev.filter((p) => p.index < playIndex));
     toast(`Undid: ${last.play.description}`);
 
     // take it out of the database too, so the next play can reuse its slot
@@ -451,6 +549,9 @@ const Index = () => {
     setPendingSlot(null);
     setReviewBase(null);
     setResolved([]);
+    setEditing(null);
+    setProblems([]);
+    setInnings(REGULATION_INNINGS);
     toast.success("New game started!");
   };
 
@@ -502,7 +603,7 @@ const Index = () => {
   };
 
   const setTeam = (team: Team, name: string) => setTeamNames((prev) => ({ ...prev, [team]: name }));
-  const info = (): GameInfo => ({ teamNames: shownTeams, date: new Date(startedAt), pitchCounts });
+  const info = (): GameInfo => ({ teamNames: shownTeams, date: new Date(startedAt), pitchCounts, innings });
 
   return (
     <div className="min-h-screen bg-background">
@@ -521,7 +622,7 @@ const Index = () => {
             size="sm"
             variant="secondary"
             onClick={handleUndo}
-            disabled={log.length === 0}
+            disabled={log.length === 0 || editing != null}
             title="Take back the last confirmed play"
           >
             <Undo2 className="w-4 h-4 mr-1" /> Undo
@@ -592,6 +693,18 @@ const Index = () => {
             placeholder="Home team"
             className="w-44 font-semibold"
           />
+          <label className="flex items-center gap-2 text-muted-foreground ml-2">
+            Innings
+            <select
+              value={innings}
+              onChange={(e) => handleInnings(Number(e.target.value))}
+              className="h-9 rounded-md border bg-background px-2 text-foreground"
+              title="Scheduled innings. Seven for the second game of a doubleheader"
+            >
+              <option value={9}>9</option>
+              <option value={7}>7</option>
+            </select>
+          </label>
         </div>
 
         {/* Scoreboard */}
@@ -602,7 +715,7 @@ const Index = () => {
           pitcher={pitcherNow}
           pitches={pitcherNow ? pitchCounts[pitcherKey(fielding, pitcherNow)] ?? 0 : null}
         />
-        <LineScore log={log} state={gameState} teamNames={shownTeams} />
+        <LineScore log={log} state={gameState} teamNames={shownTeams} innings={innings} />
 
         {/* Whether confirmed plays are actually reaching the database */}
         {(savedCount > 0 || saveError) && (
@@ -621,6 +734,35 @@ const Index = () => {
             the right. phones stack them in the same order */}
         <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
           <section className="space-y-6" aria-label="Score a play">
+            {editing != null && editedEntry && (
+              <div className="rounded-xl border-2 border-primary/40 bg-primary/5 p-4 flex items-start gap-3" role="status">
+                <Pencil className="w-4 h-4 mt-0.5 shrink-0 text-primary" />
+                <div className="flex-1 text-sm">
+                  <p className="font-semibold">
+                    Editing play #{editing + 1} ({inningLabel(editedEntry.before)}, {describeSituation(editedEntry.before)})
+                  </p>
+                  <p className="text-muted-foreground">
+                    Was: {editedEntry.play.description}. Say or type what really happened; every play after it is worked out
+                    again when you confirm.
+                  </p>
+                </div>
+                <Button size="sm" variant="ghost" onClick={handleCancelEdit}>
+                  <X className="w-4 h-4 mr-1" /> Cancel
+                </Button>
+              </div>
+            )}
+
+            {gameState.final && editing == null && (
+              <div className="rounded-xl border bg-muted p-4 text-sm" role="status">
+                <p className="font-semibold">
+                  Final: {shownTeams.away} {gameState.score.away}, {shownTeams.home} {gameState.score.home}
+                </p>
+                <p className="text-muted-foreground">
+                  The game is over. Edit or undo a play to change it, or export the game.
+                </p>
+              </div>
+            )}
+
             {/* Voice recorder */}
             <div className="bg-card border rounded-xl p-6 space-y-5">
               <VoiceRecorder onTranscriptReady={handleTranscript} isProcessing={isProcessing} />
@@ -723,20 +865,41 @@ const Index = () => {
                   Confirmed Plays ({log.length})
                 </h2>
                 {log.length > 0 && (
-                  <Button size="sm" variant="ghost" onClick={handleUndo} className="h-7 text-xs">
+                  <Button size="sm" variant="ghost" onClick={handleUndo} disabled={editing != null} className="h-7 text-xs">
                     <Trash2 className="w-3.5 h-3.5 mr-1" /> Remove last
                   </Button>
                 )}
               </div>
+              {problems.length > 0 && (
+                <div className="mb-3 rounded-lg bg-warning/15 px-4 py-3 text-sm space-y-1">
+                  <p className="font-semibold">After the change, these plays don't add up:</p>
+                  <ul className="space-y-1">
+                    {problems.map((p) => (
+                      <li key={`${p.index}:${p.message}`} className="flex items-start justify-between gap-2">
+                        <span>{p.message}</span>
+                        <Button size="sm" variant="ghost" className="h-6 text-xs shrink-0" onClick={() => handleEdit(p.index)}>
+                          Fix
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {log.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No plays yet.</p>
               ) : (
                 <div className="space-y-2 lg:max-h-[28rem] lg:overflow-y-auto lg:pr-1">
                   {[...log].reverse().map(({ play, before, after }, i) => {
+                    const index = log.length - 1 - i;
                     const team = before.half === "top" ? "away" : "home";
                     const runs = after.score[team] - before.score[team];
                     return (
-                      <div key={log.length - i} className="bg-muted rounded-lg p-3 text-sm flex items-center gap-3">
+                      <div
+                        key={index}
+                        className={`group rounded-lg p-3 text-sm flex items-center gap-3 ${
+                          editing === index ? "bg-primary/10 ring-2 ring-primary/40" : "bg-muted"
+                        }`}
+                      >
                         <span className="shrink-0 w-8 text-xs text-muted-foreground tabular-nums">{inningLabel(before)}</span>
                         <span className="shrink-0 text-xs bg-primary text-primary-foreground rounded px-2 py-0.5 uppercase font-bold">
                           {play.action}
@@ -754,6 +917,46 @@ const Index = () => {
                             +{runs} {runs === 1 ? "run" : "runs"}
                           </span>
                         )}
+                        <span className="shrink-0 flex gap-0.5">
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7"
+                            onClick={() => handleEdit(index)}
+                            disabled={isProcessing}
+                            title={`Edit play #${index + 1}`}
+                            aria-label={`Edit play #${index + 1}`}
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </Button>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7 text-destructive"
+                                disabled={isProcessing || editing != null}
+                                title={`Remove play #${index + 1}`}
+                                aria-label={`Remove play #${index + 1}`}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Remove play #{index + 1}?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  "{play.description}" comes out of the game, and the score, outs and bases for every play
+                                  after it are worked out again.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Keep it</AlertDialogCancel>
+                                <AlertDialogAction onClick={() => handleDelete(index)}>Remove play</AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </span>
                       </div>
                     );
                   })}

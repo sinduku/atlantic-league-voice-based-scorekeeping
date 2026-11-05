@@ -68,9 +68,11 @@ const SCORED_WORDS = ["scored", "scores", "score", "scoring", "came in", "came h
 const STAYED_WORDS = ["stayed", "stay", "stays", "held", "holds", "hold", "stood", "didn't move", "did not move", "stayed put", "no advance"];
 const OUT_WORDS = ["out", "thrown out", "tagged out", "doubled off", "picked off", "caught"];
 
-const NO_RBI = new Set(["error", "wild pitch", "passed ball", "balk", "stolen base"]);
+const NO_RBI = new Set(["error", "wild pitch", "passed ball", "balk", "stolen base", "caught stealing", "pickoff"]);
+// a runner is put out between pitches; the batter's turn goes on
+const RUNNER_OUT = new Set(["caught stealing", "pickoff"]);
 const BETWEEN_PITCHES = new Set(["stolen base", "wild pitch", "passed ball"]);
-const NO_BALL_IN_PLAY = new Set(["strikeout", "walk", "hit by pitch", "stolen base", "wild pitch", "passed ball", "balk"]);
+const NO_BALL_IN_PLAY = new Set(["strikeout", "walk", "hit by pitch", "stolen base", "caught stealing", "pickoff", "wild pitch", "passed ball", "balk"]);
 const BATTER_TO: Record<string, number> = {
   single: 1,
   error: 1,
@@ -315,12 +317,12 @@ const LIKELY: Record<string, Partial<Record<Base, number>>> = {
   double: { "1st": 3, "2nd": 4, "3rd": 4 },
 };
 
-function fateQuestion(play: Play, state: GameState, r: OnBase, range: number[], likely?: number): Question | null {
+function fateQuestion(play: Play, state: GameState, r: OnBase, range: number[], likely?: number, canBeOut = true): Question | null {
   // with only one place to go there is nothing to ask; a runner thrown out on
   // a forced move would have been said
   if (range.length < 2) return null;
   const options = range.map((k) => fateOption(play, state, r, k, { likely: k === likely }));
-  options.push(fateOption(play, state, r, OUT));
+  if (canBeOut) options.push(fateOption(play, state, r, OUT));
   return {
     id: `runner:${r.base}`,
     prompt: `Where did ${who(r)} end up? ${r.name ? `He was on ${r.base}.` : ""}`.trim(),
@@ -462,6 +464,31 @@ function advanceQuestion(play: Play, state: GameState, on: OnBase[], action: str
   };
 }
 
+// caught stealing or picked off with more than one runner on: which one
+function runnerOutQuestion(play: Play, state: GameState, on: OnBase[], action: string): Question {
+  const stealing = action === "caught stealing";
+  return {
+    id: "runner-out",
+    prompt: stealing ? "Who was caught stealing?" : "Who was picked off?",
+    situation: describeSituation(state),
+    required: true,
+    options: on.map((r) => {
+      const next = BASE_AT[r.rank + 1] ?? "home";
+      // only the runner put out moved; anyone else the parser moved stays put
+      const only: Play = { ...play, runners: [] };
+      return {
+        id: r.base,
+        label: stealing ? `${whoCap(r)}, trying for ${next}` : `${whoCap(r)}, off ${r.base}`,
+        play: recount(setRunner(only, state, r.base, "out")),
+        resolves: [`runner:${r.base}`],
+        match: {
+          groups: [[...(r.name ? [surname(r.name)] : []), ...BASE_WORDS[r.base], ...(stealing ? (next === "home" ? ["home", "plate"] : BASE_WORDS[next as Base]) : [])]],
+        },
+      };
+    }),
+  };
+}
+
 function errorFielderQuestion(play: Play, state: GameState): Question {
   return {
     id: "error-fielder",
@@ -540,6 +567,12 @@ function runnerQuestions(play: Play, ctx: ClarifyContext, said: string, done: Se
   const settled = (r: OnBase) => done.has(`runner:${r.base}`) || mentions(said, r);
   const unsettled = (r: OnBase) => !settled(r);
 
+  if (RUNNER_OUT.has(action)) {
+    // with one runner on there's no doubt who it was
+    if (on.length < 2 || done.has("runner-out") || on.some((r) => mentions(said, r))) return [];
+    return [runnerOutQuestion(play, state, on, action)];
+  }
+
   if (BETWEEN_PITCHES.has(action)) {
     // naming any runner says who moved; the parse already has him
     if (on.length < 2 || done.has("advance") || on.some((r) => mentions(said, r))) return [];
@@ -577,7 +610,27 @@ function runnerQuestions(play: Play, ctx: ClarifyContext, said: string, done: Se
     return questions;
   }
 
-  if (action === "fly out" || action === "sacrifice fly") {
+  if (action === "sacrifice bunt") {
+    // the batter gave himself up to move the runners: anyone forced moved up
+    // a base (had one been put out it would be a fielder's choice), so only
+    // a runner who went further, or one who wasn't forced, is asked about
+    const occupied = (rank: number) => on.some((r) => r.rank === rank);
+    for (const r of on) {
+      if (!unsettled(r)) continue;
+      let forced = true;
+      for (let k = 1; k < r.rank; k++) if (!occupied(k)) forced = false;
+      if (forced && destRank(play, r) === r.rank + 1) continue;
+      const range = legalRange(play, r, on, forced ? r.rank + 1 : r.rank, settled);
+      const q = fateQuestion(play, state, r, range, r.rank + 1, false);
+      if (q) questions.push(q);
+    }
+    return questions;
+  }
+
+  // a pop up holds the runners
+  if (action === "pop out") return [];
+
+  if (action === "fly out" || action === "line out" || action === "sacrifice fly") {
     // a pop up or a catch in the infield holds the runners
     const fielders = play.fielders_involved.map(Number).filter(Boolean);
     const infield = (play.hit_type ?? "").toLowerCase() === "pop up" || (fielders.length > 0 && fielders.every((f) => f <= 6));
@@ -707,12 +760,17 @@ const VERB: Record<string, string> = {
   strikeout: "strikes out",
   "ground out": "grounds out",
   "fly out": "flies out",
+  "line out": "lines out",
+  "pop out": "pops out",
+  "sacrifice bunt": "lays down a sacrifice bunt",
   "sacrifice fly": "hits a sacrifice fly",
   error: "reaches on an error",
   "fielder's choice": "reaches on a fielder's choice",
 };
 const EVENT: Record<string, string> = {
   "stolen base": "Stolen base",
+  "caught stealing": "Caught stealing",
+  pickoff: "Pickoff",
   "wild pitch": "Wild pitch",
   "passed ball": "Passed ball",
   balk: "Balk",

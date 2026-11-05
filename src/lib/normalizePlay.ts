@@ -13,12 +13,15 @@ const NO_BALL_IN_PLAY = new Set([
   "walk",
   "hit by pitch",
   "stolen base",
+  "caught stealing",
+  "pickoff",
   "wild pitch",
   "passed ball",
   "balk",
 ]);
 
-const CANONICAL_ACTIONS = [
+// the same list as ACTIONS in server/phrasings.js
+export const CANONICAL_ACTIONS = [
   "single",
   "double",
   "triple",
@@ -26,15 +29,20 @@ const CANONICAL_ACTIONS = [
   "strikeout",
   "walk",
   "fly out",
+  "line out",
+  "pop out",
   "ground out",
   "hit by pitch",
   "error",
   "fielder's choice",
   "stolen base",
+  "caught stealing",
+  "pickoff",
   "wild pitch",
   "passed ball",
   "balk",
   "sacrifice fly",
+  "sacrifice bunt",
 ];
 
 // lowercased, apostrophes dropped, hyphens and underscores read as spaces, so
@@ -54,14 +62,16 @@ const ACTION_ALIASES: Record<string, string> = {
   "grounder": "ground out",
   "flyout": "fly out",
   "fly ball out": "fly out",
-  "lineout": "fly out",
-  "line out": "fly out",
-  "line drive out": "fly out",
-  "popout": "fly out",
-  "pop out": "fly out",
-  "popup": "fly out",
-  "pop up": "fly out",
-  "pop fly": "fly out",
+  "lineout": "line out",
+  "lined out": "line out",
+  "line drive out": "line out",
+  "popout": "pop out",
+  "popped out": "pop out",
+  "popup": "pop out",
+  "pop up": "pop out",
+  "popped up": "pop out",
+  "pop fly": "pop out",
+  "infield fly": "pop out",
   "foul out": "fly out",
   "foulout": "fly out",
   "strike out": "strikeout",
@@ -85,6 +95,17 @@ const ACTION_ALIASES: Record<string, string> = {
   "fielder choice": "fielder's choice",
   "steal": "stolen base",
   "sb": "stolen base",
+  "cs": "caught stealing",
+  "caught steal": "caught stealing",
+  "thrown out stealing": "caught stealing",
+  "pick off": "pickoff",
+  "picked off": "pickoff",
+  "po": "pickoff",
+  "sac bunt": "sacrifice bunt",
+  "sacrifice": "sacrifice bunt",
+  "sacrifice hit": "sacrifice bunt",
+  "sac hit": "sacrifice bunt",
+  "sh": "sacrifice bunt",
   "wp": "wild pitch",
   "pb": "passed ball",
   "reached on error": "error",
@@ -94,16 +115,22 @@ const ACTION_ALIASES: Record<string, string> = {
 };
 
 const AIRBORNE = new Set(["fly ball", "line drive", "pop up"]);
+const CAUGHT: Record<string, string> = { "fly ball": "fly out", "line drive": "line out", "pop up": "pop out" };
 
 export function normalizeAction(raw: string, hitType?: string | null): string {
   const key = actionKey(raw);
   // a double or triple play is an out on the batter; which kind depends on how
   // the ball was hit. matched anywhere in the phrase, since the model words it
   // as "ground into double play", "lined into a triple play" and so on
+  const type = hitType?.toLowerCase() ?? "";
   if (/\b(double|triple) play\b|^(dp|tp|gidp)$/.test(key)) {
-    return hitType && AIRBORNE.has(hitType.toLowerCase()) ? "fly out" : "ground out";
+    return AIRBORNE.has(type) ? CAUGHT[type] : "ground out";
   }
-  return ACTION_ALIASES[key] ?? key;
+  const action = ACTION_ALIASES[key] ?? key;
+  // a caught liner or pop up is its own kind of out, whatever the parser
+  // called it
+  if (action === "fly out" && AIRBORNE.has(type)) return CAUGHT[type];
+  return action;
 }
 
 export function normalizeBase(raw: string): string {

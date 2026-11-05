@@ -8,6 +8,8 @@ export interface GameInfo {
   date: Date;
   // tap-counted pitches, keyed by pitcherKey
   pitchCounts?: Record<string, number>;
+  // scheduled innings, when not nine
+  innings?: number;
 }
 
 function cell(value: unknown): string {
@@ -74,9 +76,9 @@ export function battingCsv(log: LoggedPlay[], info: GameInfo): string {
 }
 
 export function pitchingCsv(log: LoggedPlay[], info: GameInfo): string {
-  const header = ["Team", "Pitcher", "IP", "BF", "H", "R", "BB", "HBP", "K", "HR", "Pitches"];
+  const header = ["Team", "Pitcher", "IP", "BF", "H", "R", "ER", "BB", "HBP", "K", "HR", "Pitches"];
   const rows = pitchingLines(log, info.pitchCounts).map((p) => [
-    info.teamNames[p.team], p.name, inningsPitched(p.outs), p.bf, p.h, p.r, p.bb, p.hbp, p.k, p.hr, p.pitches,
+    info.teamNames[p.team], p.name, inningsPitched(p.outs), p.bf, p.h, p.r, p.er, p.bb, p.hbp, p.k, p.hr, p.pitches,
   ]);
   return toCsv([header, ...rows]);
 }
