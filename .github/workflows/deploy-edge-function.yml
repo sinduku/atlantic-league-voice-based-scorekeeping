@@ -69,10 +69,10 @@ jobs:
 
       - name: Set the Groq key on the function
         if: env.GROQ_API_KEY != ''
-        run: supabase secrets set GROQ_API_KEY="$GROQ_API_KEY" --project-ref "$PROJECT_REF"
+        run: supabase secrets set GROQ_API_KEY="$GROQ_API_KEY" --project-ref "$PROJECT_REF" --yes
 
       - name: Deploy parse-play
-        run: supabase functions deploy parse-play --project-ref "$PROJECT_REF"
+        run: supabase functions deploy parse-play --project-ref "$PROJECT_REF" --yes
 
       # one real parse, so a deploy that is broken at runtime shows up here
       # rather than on the live site. the current function reports its model
