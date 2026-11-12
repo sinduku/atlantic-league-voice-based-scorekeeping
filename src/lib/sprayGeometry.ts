@@ -61,21 +61,26 @@ export const isHit = (play: Play) => HIT_ACTIONS.has(play.action.toLowerCase());
 
 export const markerColor = (play: Play) => HIT_COLORS[(play.hit_type || "").toLowerCase()] ?? DEFAULT_COLOR;
 
-// checked in order, so the specific phrases come before the general ones
+// Where the ball went, from the words in the play-by-play. Checked in order,
+// so the specific phrases come before the general ones ("left-center" before
+// "left", "between short and third" before "short"). The area says whether
+// the words point at the infield or the outfield; how far the ball went
+// still depends on what happened (see depth below).
 const DIRECTIONS: [RegExp, number, "infield" | "outfield"][] = [
-  [/left.{0,6}line|third.{0,6}line/, -40, "outfield"],
-  [/right.{0,6}line|first.{0,6}line/, 40, "outfield"],
+  [/left.{0,12}line|third.{0,12}line/, -41, "outfield"],
+  [/right.{0,12}line|first.{0,12}line/, 41, "outfield"],
   [/left.{0,3}cent(er|re)/, -22, "outfield"],
   [/right.{0,3}cent(er|re)/, 22, "outfield"],
-  [/left/, -30, "outfield"],
-  [/right/, 30, "outfield"],
+  [/short.{0,14}third|third.{0,14}short|\bhole\b|left side/, -27, "infield"],
+  [/first.{0,14}second|second.{0,14}first|right side/, 26, "infield"],
+  [/up the middle|through the middle|middle|past the pitcher|back up the box/, 0, "infield"],
+  [/left/, -29, "outfield"],
+  [/right/, 29, "outfield"],
   [/cent(er|re)/, 0, "outfield"],
-  [/hole/, -16, "infield"],
-  [/short/, -20, "infield"],
-  [/third/, -34, "infield"],
-  [/second/, 14, "infield"],
-  [/middle/, 0, "infield"],
-  [/first/, 34, "infield"],
+  [/short/, -15, "infield"],
+  [/third/, -36, "infield"],
+  [/second/, 15, "infield"],
+  [/first/, 36, "infield"],
   [/pitcher|mound/, 0, "infield"],
   [/catcher|plate|home/, 0, "infield"],
 ];
@@ -94,35 +99,98 @@ export const ZONE_DIRECTIONS: Record<number, [number, "infield" | "outfield"]> =
   9: [0, "infield"],
 };
 
-function direction(play: Play): [number, "infield" | "outfield"] {
-  const where = (play.hit_location || "").toLowerCase();
-  for (const [pattern, angle, area] of DIRECTIONS) {
-    if (pattern.test(where)) return [angle, area];
-  }
-  return ZONE_DIRECTIONS[play.field_zone ?? 3] ?? [0, "outfield"];
+// where each fielder stands, as [angle, distance from home]: where an out
+// was made, or an error committed, when the words don't say more
+const FIELDER_SPOTS: Record<string, [number, number]> = {
+  "1": [0, 44],
+  "2": [0, 14],
+  "3": [36, 86],
+  "4": [15, 98],
+  "5": [-36, 86],
+  "6": [-15, 98],
+  "7": [-29, 150],
+  "8": [0, 160],
+  "9": [29, 150],
+};
+
+const OUTS_IN_PLAY = new Set([
+  "ground out",
+  "fly out",
+  "line out",
+  "pop out",
+  "sacrifice fly",
+  "sacrifice bunt",
+  "fielder's choice",
+  "error",
+]);
+
+export interface SprayPolar {
+  // 0 is straight out to center field, negative toward left
+  angle: number;
+  // distance from home plate, in the chart's units (the fence is 180)
+  radius: number;
 }
 
-function distance(play: Play, area: "infield" | "outfield"): number {
+// Where a ball in play goes on the chart, before the small nudge that keeps
+// dots apart. The direction comes from the play's words (hit_location), or
+// the fielder who made the play, or the zone. The distance comes from what
+// happened:
+// - a home run clears the fence; a triple reaches the wall, a double the
+//   warning track or the gap, even "down the line" from an infield word
+// - a single the words place in the infield got through to the outfield
+//   grass, unless it was a bunt or the words say it stayed in the infield
+// - an out, or an error, is drawn where the fielder who handled it stands,
+//   and a fly ball caught in the outfield sits deeper than a liner or a
+//   blooper
+export function sprayPolar(play: Play): SprayPolar {
   const action = play.action.toLowerCase();
   const type = (play.hit_type || "").toLowerCase();
   const where = (play.hit_location || "").toLowerCase();
+  const fielder = play.fielders_involved?.[0];
+  const spot = fielder ? FIELDER_SPOTS[fielder] : undefined;
 
-  if (action === "home run") return FIELD.fence + 18;
-  if (area === "infield") {
-    if (/catcher|plate|home/.test(where)) return 16;
-    if (type === "bunt") return 32;
-    if (/pitcher|mound/.test(where)) return 44;
-    if (type === "pop up") return 62;
-    if (type === "line drive") return 82;
-    return 76;
+  let angle: number;
+  let area: "infield" | "outfield";
+  const said = DIRECTIONS.find(([pattern]) => pattern.test(where));
+  if (said) [, angle, area] = said;
+  else if (spot) [angle, area] = [spot[0], spot[1] > 100 ? "outfield" : "infield"];
+  else [angle, area] = ZONE_DIRECTIONS[play.field_zone ?? 3] ?? [0, "outfield"];
+
+  if (action === "home run") return { angle, radius: FIELD.fence + 18 };
+  if (action === "triple") return { angle, radius: FIELD.fence - 14 };
+  if (action === "double") return { angle, radius: type === "ground ball" ? 148 : 154 };
+
+  if (action === "single") {
+    const stayedIn = type === "bunt" || /infield|bunt|dribbl|swinging bunt|in front of the plate/.test(where);
+    if (stayedIn) {
+      if (/catcher|plate|home/.test(where)) return { angle, radius: 18 };
+      return { angle, radius: type === "bunt" ? 34 : spot && spot[1] <= 100 ? spot[1] - 6 : 80 };
+    }
+    // through the infield or over it: the outfield grass in front of the
+    // fielder who picked it up
+    if (type === "line drive") return { angle, radius: 126 };
+    if (type === "fly ball" || type === "pop up") return { angle, radius: 120 };
+    return { angle, radius: 116 };
   }
-  // a hit that rolled to the wall goes deeper than the catch on a fly out
-  const extra = action === "triple" ? 22 : action === "double" ? 12 : 0;
-  if (type === "fly ball") return Math.min(150 + extra, FIELD.fence - 6);
-  if (type === "line drive") return 128 + extra;
-  if (type === "pop up") return 108;
-  if (type === "ground ball") return 112 + extra;
-  return 132 + extra;
+
+  if (OUTS_IN_PLAY.has(action)) {
+    if (type === "bunt" || action === "sacrifice bunt") return { angle, radius: /catcher|plate|home/.test(where) ? 18 : 34 };
+    const outfield = spot ? spot[1] > 100 : area === "outfield";
+    if (outfield) {
+      if (type === "pop up" || action === "pop out") return { angle, radius: 116 };
+      if (type === "line drive" || action === "line out") return { angle, radius: 136 };
+      if (type === "ground ball") return { angle, radius: 120 };
+      return { angle, radius: 156 };
+    }
+    if (/catcher|plate|home/.test(where) || fielder === "2") return { angle, radius: 16 };
+    if (/pitcher|mound/.test(where) || fielder === "1") return { angle, radius: type === "pop up" || action === "pop out" ? 52 : 44 };
+    const base = spot ? spot[1] : 90;
+    if (type === "pop up" || action === "pop out") return { angle, radius: base - 16 };
+    if (type === "line drive" || action === "line out") return { angle, radius: base - 4 };
+    return { angle, radius: base };
+  }
+
+  return { angle, radius: area === "infield" ? 86 : 132 };
 }
 
 // a small, repeatable nudge so plays to the same spot don't hide each other
@@ -133,9 +201,11 @@ function spread(index: number): [number, number] {
 }
 
 export function sprayPoint(play: Play, index: number) {
-  const [angle, area] = direction(play);
+  const { angle, radius } = sprayPolar(play);
   const [da, dr] = spread(index);
-  // keep the dot inside fair territory however it is nudged
+  // keep the dot inside fair territory however it is nudged, and a home run
+  // beyond the fence
   const a = Math.max(-43, Math.min(43, angle + da));
-  return toXY(a, Math.max(10, distance(play, area) + dr));
+  const r = radius > FIELD.fence ? Math.max(FIELD.fence + 8, radius + dr) : Math.min(FIELD.fence - 4, Math.max(10, radius + dr));
+  return toXY(a, r);
 }

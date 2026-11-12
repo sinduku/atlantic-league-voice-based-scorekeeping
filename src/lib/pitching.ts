@@ -1,3 +1,4 @@
+import { isStrike, type PitchCode } from "@/lib/pitches";
 import { HIT_ACTIONS, battingTeam, isPlateAppearance, type LoggedPlay, type Team } from "@/lib/boxScore";
 
 // Pitching lines built from the confirmed plays, the same way batting lines
@@ -31,8 +32,12 @@ export interface PitchingLine {
   hbp: number;
   k: number;
   hr: number;
-  // from the tap counter; null when nobody counted
+  // pitches logged pitch by pitch, plus any tapped on the counter; null
+  // when nobody counted
   pitches: number | null;
+  // of those, strikes (fouls and balls in play included); null when no
+  // pitch was logged pitch by pitch, since taps don't say which
+  strikes: number | null;
 }
 
 export const UNNAMED_PITCHER = "Unnamed pitcher";
@@ -51,7 +56,7 @@ export function pitchingLines(log: LoggedPlay[], pitchCounts: Record<string, num
   const lineFor = (team: Team, name: string) => {
     const key = pitcherKey(team, name);
     if (!lines.has(key)) {
-      lines.set(key, { name, team, outs: 0, bf: 0, h: 0, r: 0, er: 0, bb: 0, hbp: 0, k: 0, hr: 0, pitches: pitchCounts[key] ?? null });
+      lines.set(key, { name, team, outs: 0, bf: 0, h: 0, r: 0, er: 0, bb: 0, hbp: 0, k: 0, hr: 0, pitches: pitchCounts[key] ?? null, strikes: null });
       order.push(key);
     }
     return key;
@@ -88,6 +93,10 @@ export function pitchingLines(log: LoggedPlay[], pitchCounts: Record<string, num
     if (action === "walk") line.bb++;
     if (action === "hit by pitch") line.hbp++;
     if (action === "strikeout") line.k++;
+    if (play.pitches?.length) {
+      line.pitches = (line.pitches ?? 0) + play.pitches.length;
+      line.strikes = (line.strikes ?? 0) + play.pitches.filter((p) => isStrike(p as PitchCode)).length;
+    }
 
     // charge each run to whoever let that runner on; the score is the
     // authority on how many runs there were, the runner list on whose they were

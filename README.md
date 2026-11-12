@@ -185,12 +185,24 @@ in `src/data/extra-players.txt`.
   after any later half-inning with a leader, or on a walk-off, where only the winning
   run counts unless it was a home run. Nine innings, or seven for the second game of a
   doubleheader; a finished game takes no new plays
-- 🎯 Spray chart placed by direction and how the ball was hit; filled dots are hits,
-  hollow are outs, and it filters by team
+- 🎾 Pitch by pitch: log every ball, called or swinging strike, foul and foul tip with
+  the buttons, the B / C / S / F / T keys, or by saying it ("ball", "strike looking",
+  "foul"). The count shows on the scoreboard, ball four or strike three puts the walk
+  or strikeout up for review on its own, and the play that ends the at bat keeps the
+  whole sequence and the count it ended on (in the log, the CSV and the PDF). Pitch
+  counts and strikes for each pitcher come from the logged pitches
+- 🎯 Spray chart placed where the play-by-play says the ball went: outs where the
+  fielder who made them stands, singles through the infield on the outfield grass,
+  bunts in front of the plate, doubles in the gaps and corners, triples at the wall.
+  Each dot names its play number, and pointing at a play in the log lights it up.
+  Filled dots are hits, hollow are outs
+- 👥 The spray chart and the lineup card show the team at bat, and switch when the
+  side changes
 - 📋 Lineups for both teams: the batter due up and the pitcher are filled in on every play,
   shorthand included, and a batter out of turn or missing from the lineup is flagged.
   Pinch hitters and pitching changes keep each slot's history
-- ⚾ Pitching lines (IP, BF, H, R, ER, BB, K, HR) with a tap-to-count pitch counter. A run is
+- ⚾ Pitching lines (IP, BF, H, R, ER, BB, K, HR, pitches and strikes), with a tap counter
+  for pitches nobody called. A run is
   charged to the pitcher who put that runner on base, even after a pitching change.
   Earned runs leave out runners who reached on an error, runs that score on an error or
   a passed ball, and every run after errors cost the defense its third out. Errors made

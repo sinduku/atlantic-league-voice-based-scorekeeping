@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { ArrowRightLeft, Minus, Pencil, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,19 +28,26 @@ interface LineupPanelProps {
   dueUp: Record<Team, number>;
   pitching: PitchingLine[];
   pitchCounts: Record<string, number>;
+  // the pitcher now: pitches and strikes logged pitch by pitch (the at bat in
+  // progress included) plus any tapped on the counter
+  pitchesNow?: { pitches: number; strikes: number | null };
   onChange: (team: Team, lineup: TeamLineup) => void;
   onMarkDueUp: (team: Team, slot: number) => void;
   onPitch: (team: Team, pitcher: string, delta: number) => void;
 }
 
 export function LineupPanel(props: LineupPanelProps) {
-  const { lineups, teamNames, batting, dueUp, pitching, pitchCounts, onPitch } = props;
+  const { lineups, teamNames, batting, dueUp, pitching, pitchCounts, pitchesNow, onPitch } = props;
   const [tab, setTab] = useState<Team>(batting);
+  // show the side at bat, and switch with it when the half-inning changes
+  useEffect(() => setTab(batting), [batting]);
 
   const fielding = otherTeam(batting);
   const pitcher = currentPitcher(lineups[fielding]);
   const line = pitcher ? pitching.find((p) => p.team === fielding && p.name.toLowerCase() === pitcher.toLowerCase()) : null;
-  const pitches = pitcher ? pitchCounts[pitcherKey(fielding, pitcher)] ?? 0 : 0;
+  // taps on the counter, on top of the pitches logged one by one
+  const tapped = pitcher ? pitchCounts[pitcherKey(fielding, pitcher)] ?? 0 : 0;
+  const pitches = pitchesNow?.pitches ?? tapped;
   const order = lineups[batting];
 
   return (
@@ -84,17 +91,28 @@ export function LineupPanel(props: LineupPanelProps) {
                   variant="outline"
                   className="h-8 w-8"
                   onClick={() => onPitch(fielding, pitcher, -1)}
-                  disabled={pitches === 0}
-                  aria-label="Take back one pitch"
+                  disabled={tapped === 0}
+                  aria-label="Take back one tapped pitch"
+                  title="Takes back a tapped pitch. Use Undo pitch for one logged pitch by pitch"
                 >
                   <Minus className="w-4 h-4" />
                 </Button>
-                <span className="w-10 text-center text-lg font-bold tabular-nums" aria-live="polite" title="Pitches thrown">
+                <span className="min-w-10 px-1 text-center text-lg font-bold tabular-nums" aria-live="polite" title="Pitches thrown">
                   {pitches}
                 </span>
-                <Button size="sm" className="h-8" onClick={() => onPitch(fielding, pitcher, 1)} aria-label="Count a pitch">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8"
+                  onClick={() => onPitch(fielding, pitcher, 1)}
+                  aria-label="Count a pitch without saying what it was"
+                  title="Counts a pitch without saying what it was. The pitch buttons above count and log it"
+                >
                   <Plus className="w-4 h-4 mr-1" /> Pitch
                 </Button>
+                {pitchesNow?.strikes != null && pitches > 0 && (
+                  <span className="text-xs text-muted-foreground tabular-nums ml-1">{pitchesNow.strikes} strikes</span>
+                )}
               </div>
             </div>
           ) : (

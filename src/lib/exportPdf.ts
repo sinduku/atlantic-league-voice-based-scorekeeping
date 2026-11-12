@@ -3,6 +3,7 @@ import autoTable from "jspdf-autotable";
 import type { GameState } from "@/types/game";
 import { battingLines, battingTeam, lineScore, teamOf, type LoggedPlay, type Team } from "@/lib/boxScore";
 import { inningsPitched, pitchingLines } from "@/lib/pitching";
+import { sequence } from "@/lib/pitches";
 import { average, describeRunners, fileBaseName, type GameInfo } from "@/lib/exportCsv";
 import { BASES, FIELD, LEGEND, isBallInPlay, isHit, markerColor, sprayPoint, toXY } from "@/lib/sprayGeometry";
 
@@ -195,9 +196,9 @@ export function exportPdf(log: LoggedPlay[], state: GameState, info: GameInfo) {
     const rows = pitching.filter((p) => p.team === team);
     autoTable(doc, {
       startY: y,
-      head: [[`${info.teamNames[team]} pitching`, "IP", "BF", "H", "R", "ER", "BB", "HBP", "K", "HR", "Pitches"]],
+      head: [[`${info.teamNames[team]} pitching`, "IP", "BF", "H", "R", "ER", "BB", "HBP", "K", "HR", "Pitches-strikes"]],
       body: rows.length
-        ? rows.map((p) => [p.name, inningsPitched(p.outs), p.bf, p.h, p.r, p.er, p.bb, p.hbp, p.k, p.hr, p.pitches ?? ""])
+        ? rows.map((p) => [p.name, inningsPitched(p.outs), p.bf, p.h, p.r, p.er, p.bb, p.hbp, p.k, p.hr, p.pitches == null ? "" : p.strikes == null ? p.pitches : `${p.pitches}-${p.strikes}`])
         : [["No pitching recorded yet", "", "", "", "", "", "", "", "", "", ""]],
       theme: "striped",
       styles: { fontSize: 9, halign: "center", cellPadding: 3 },
@@ -211,7 +212,7 @@ export function exportPdf(log: LoggedPlay[], state: GameState, info: GameInfo) {
   // approximates, so say how ER was worked out
   doc.setFont("helvetica", "italic").setFontSize(8).setTextColor(110);
   doc.text(
-    "R is charged to the pitcher who put each runner on base. ER leaves out runners who reached on an error, runs on errors and passed balls, and runs after errors cost a third out; the official scorer may differ. Pitches are tap-counted.",
+    "R is charged to the pitcher who put each runner on base. ER leaves out runners who reached on an error, runs on errors and passed balls, and runs after errors cost a third out; the official scorer may differ. Pitches come from the pitch-by-pitch log plus any tapped on the counter.",
     MARGIN,
     y,
     { maxWidth: pageWidth - MARGIN * 2 }
@@ -222,13 +223,14 @@ export function exportPdf(log: LoggedPlay[], state: GameState, info: GameInfo) {
   // play-by-play
   autoTable(doc, {
     startY: y + 6,
-    head: [["#", "Inn", "Batter", "Play", "Description", "Runners", "RBI", "Score"]],
+    head: [["#", "Inn", "Batter", "Play", "Description", "Pitches", "Runners", "RBI", "Score"]],
     body: log.map(({ play, before, after }, i) => [
       i + 1,
       half(before),
       play.batter || "",
       play.action,
       play.description,
+      play.pitches?.length ? `${play.count ? `${play.count}: ` : ""}${sequence(play.pitches)}` : "",
       describeRunners(play.runners),
       play.rbi || "",
       `${after.score.away}-${after.score.home}${after.score[battingTeam(before.half)] > before.score[battingTeam(before.half)] ? " *" : ""}`,
@@ -241,9 +243,10 @@ export function exportPdf(log: LoggedPlay[], state: GameState, info: GameInfo) {
       1: { cellWidth: 28 },
       2: { cellWidth: 70 },
       3: { cellWidth: 62 },
-      5: { cellWidth: 110 },
-      6: { cellWidth: 28, halign: "center" },
-      7: { cellWidth: 40, halign: "center" },
+      5: { cellWidth: 52 },
+      6: { cellWidth: 100 },
+      7: { cellWidth: 28, halign: "center" },
+      8: { cellWidth: 40, halign: "center" },
     },
     margin: { left: MARGIN, right: MARGIN },
   });

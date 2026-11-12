@@ -7,9 +7,19 @@ interface ScoreboardProps {
   atBat?: string | null;
   pitcher?: string | null;
   pitches?: number | null;
+  // balls and strikes on the batter now
+  count?: { balls: number; strikes: number };
 }
 
-export function Scoreboard({ state, teamNames = { away: "Away", home: "Home" }, atBat, pitcher, pitches }: ScoreboardProps) {
+const Dots = ({ n, of, color, label }: { n: number; of: number; color: string; label: string }) => (
+  <div className="flex gap-1 justify-center" aria-label={`${n} ${label}`}>
+    {Array.from({ length: of }, (_, i) => (
+      <div key={i} className={`w-3.5 h-3.5 rounded-full border-2 ${i < n ? color : "bg-transparent border-muted-foreground/40"}`} />
+    ))}
+  </div>
+);
+
+export function Scoreboard({ state, teamNames = { away: "Away", home: "Home" }, atBat, pitcher, pitches, count = { balls: 0, strikes: 0 } }: ScoreboardProps) {
   const bases = [
     { key: "second" as const, cx: 40, cy: 12 },
     { key: "third" as const, cx: 18, cy: 34 },
@@ -80,6 +90,19 @@ export function Scoreboard({ state, teamNames = { away: "Away", home: "Home" }, 
             {teamNames.away} – {teamNames.home}
           </span>
         </div>
+
+        {/* Count: three balls and two strikes are the most a batter can stand on */}
+        {!state.final && (
+          <div className="text-center">
+            <span className="text-xs uppercase tracking-wider text-muted-foreground block">
+              Count <span className="tabular-nums font-semibold text-foreground">{count.balls}-{count.strikes}</span>
+            </span>
+            <div className="mt-1 space-y-1">
+              <Dots n={Math.min(count.balls, 3)} of={3} color="bg-success border-success" label="balls" />
+              <Dots n={Math.min(count.strikes, 2)} of={2} color="bg-warning border-warning" label="strikes" />
+            </div>
+          </div>
+        )}
 
         {/* Outs */}
         <div className="text-center">

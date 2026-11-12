@@ -1,12 +1,13 @@
 import { battingLines, battingTeam, type LoggedPlay, type Team } from "@/lib/boxScore";
 import { inningsPitched, pitchingLines } from "@/lib/pitching";
+import { sequence } from "@/lib/pitches";
 
 // Game exports as spreadsheets: one row per play, one per batter, one per pitcher.
 
 export interface GameInfo {
   teamNames: Record<Team, string>;
   date: Date;
-  // tap-counted pitches, keyed by pitcherKey
+  // pitches tapped on the counter, keyed by pitcherKey
   pitchCounts?: Record<string, number>;
   // scheduled innings, when not nine
   innings?: number;
@@ -31,7 +32,7 @@ export function playByPlayCsv(log: LoggedPlay[], info: GameInfo): string {
   const header = [
     "#", "Inning", "Half", "Batting", "Batter", "Pitcher", "Play", "Description", "Runners",
     "RBI", "Outs on play", "Runs", "Outs after", `${info.teamNames.away} score`, `${info.teamNames.home} score`,
-    "Fielders", "Hit type", "Hit location", "Contact", "Pitch", "Pitch location", "Count", "Confidence",
+    "Fielders", "Hit type", "Hit location", "Contact", "Pitch", "Pitch location", "Count", "Pitches", "Confidence",
   ];
   const rows = log.map(({ play, before, after }, i) => {
     const team = battingTeam(before.half);
@@ -59,6 +60,7 @@ export function playByPlayCsv(log: LoggedPlay[], info: GameInfo): string {
       play.pitch_type,
       play.pitch_location,
       play.count,
+      sequence(play.pitches),
       play.confidence,
     ];
   });
@@ -76,9 +78,9 @@ export function battingCsv(log: LoggedPlay[], info: GameInfo): string {
 }
 
 export function pitchingCsv(log: LoggedPlay[], info: GameInfo): string {
-  const header = ["Team", "Pitcher", "IP", "BF", "H", "R", "ER", "BB", "HBP", "K", "HR", "Pitches"];
+  const header = ["Team", "Pitcher", "IP", "BF", "H", "R", "ER", "BB", "HBP", "K", "HR", "Pitches", "Strikes"];
   const rows = pitchingLines(log, info.pitchCounts).map((p) => [
-    info.teamNames[p.team], p.name, inningsPitched(p.outs), p.bf, p.h, p.r, p.er, p.bb, p.hbp, p.k, p.hr, p.pitches,
+    info.teamNames[p.team], p.name, inningsPitched(p.outs), p.bf, p.h, p.r, p.er, p.bb, p.hbp, p.k, p.hr, p.pitches, p.strikes,
   ]);
   return toCsv([header, ...rows]);
 }

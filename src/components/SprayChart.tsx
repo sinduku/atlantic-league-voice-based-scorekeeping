@@ -1,12 +1,18 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Play } from "@/types/game";
 import { BASES, FIELD, LEGEND, isBallInPlay, isHit, markerColor, sprayPoint, toXY } from "@/lib/sprayGeometry";
 import { inningLabel, teamOf, type Team } from "@/lib/boxScore";
 
 interface SprayChartProps {
+  // the confirmed plays in order, so each dot can name its play-by-play number
   plays: Play[];
   teamNames: Record<Team, string>;
+  // the team at bat: the chart shows its balls in play, and switches when
+  // the side changes
+  batting: Team;
+  // the play-by-play entry being pointed at, by its place in plays
+  highlight?: number | null;
 }
 
 type Filter = "all" | Team;
@@ -18,11 +24,18 @@ const leftDirt = toXY(-45, dirt);
 const rightDirt = toXY(45, dirt);
 const mound = toXY(0, 43);
 
-export function SprayChart({ plays, teamNames }: SprayChartProps) {
-  const [filter, setFilter] = useState<Filter>("all");
+export function SprayChart({ plays, teamNames, batting, highlight = null }: SprayChartProps) {
+  const [filter, setFilter] = useState<Filter>(batting);
+  // follow the side at bat; the scorer can still pick another view until the
+  // next change of sides
+  useEffect(() => setFilter(batting), [batting]);
 
-  // each ball keeps its place when the filter changes
-  const inPlay = plays.filter(isBallInPlay).map((play, i) => ({ play, point: sprayPoint(play, i) }));
+  // each ball keeps its place when the filter changes, and the same place as
+  // in the PDF
+  const inPlay = plays
+    .map((play, index) => ({ play, index }))
+    .filter(({ play }) => isBallInPlay(play))
+    .map(({ play, index }, i) => ({ play, index, point: sprayPoint(play, i) }));
   const shown = inPlay.filter(({ play }) => filter === "all" || teamOf(play) === filter);
   const hits = shown.filter(({ play }) => isHit(play)).length;
 
@@ -89,24 +102,29 @@ export function SprayChart({ plays, teamNames }: SprayChartProps) {
           <rect x={home.x - 4} y={home.y - 4} width="8" height="8" fill="#ffffff" stroke="#6b7280" transform={`rotate(45 ${home.x} ${home.y})`} />
 
           {/* Batted balls: filled for hits, hollow for outs */}
-          {shown.map(({ play, point: { x, y } }, i) => {
+          {/* the pointed-at play last, so it draws on top */}
+          {[...shown].sort((a, b) => Number(a.index === highlight) - Number(b.index === highlight)).map(({ play, index, point: { x, y } }) => {
             const color = markerColor(play);
             const hit = isHit(play);
+            const lit = index === highlight;
             return (
-              <Tooltip key={i}>
+              <Tooltip key={index}>
                 <TooltipTrigger asChild>
-                  <circle
-                    cx={x}
-                    cy={y}
-                    r="5"
-                    fill={hit ? color : "#ffffff"}
-                    stroke={color}
-                    strokeWidth={hit ? 1 : 2}
-                    className="cursor-pointer"
-                  />
+                  <g className="cursor-pointer">
+                    {lit && <circle cx={x} cy={y} r="10" fill="none" stroke={color} strokeWidth="1.5" opacity="0.6" />}
+                    <circle
+                      cx={x}
+                      cy={y}
+                      r={lit ? 6.5 : 5}
+                      fill={hit ? color : "#ffffff"}
+                      stroke={color}
+                      strokeWidth={hit ? 1 : 2}
+                    />
+                  </g>
                 </TooltipTrigger>
-                <TooltipContent side="top" className="text-xs">
+                <TooltipContent side="top" className="text-xs max-w-[16rem]">
                   <p className="font-semibold">
+                    <span className="text-muted-foreground font-normal">#{index + 1} </span>
                     {play.batter || "Unnamed batter"}
                     {play.inning ? (
                       <span className="text-muted-foreground font-normal">
@@ -114,9 +132,9 @@ export function SprayChart({ plays, teamNames }: SprayChartProps) {
                       </span>
                     ) : null}
                   </p>
-                  <p className="capitalize">{play.action}</p>
-                  <p className="text-muted-foreground">
-                    {[play.hit_type, play.hit_location && `to ${play.hit_location}`].filter(Boolean).join(" ")}
+                  <p>{play.description}</p>
+                  <p className="text-muted-foreground capitalize">
+                    {[play.action, play.hit_type, play.hit_location && `to ${play.hit_location}`].filter(Boolean).join(" · ")}
                   </p>
                 </TooltipContent>
               </Tooltip>

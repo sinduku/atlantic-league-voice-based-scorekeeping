@@ -30,6 +30,17 @@ import {
 import { toast } from "sonner";
 import { createGame, deletePlay, replacePlaysFrom, savePlay, type SaveResult } from "@/lib/persistence";
 import { replayLog, withEdit, type ReplayProblem } from "@/lib/replay";
+import {
+  PITCH_LABELS,
+  countOf,
+  decided,
+  formatCount,
+  isStrike,
+  parsePitch,
+  pitchesForPlay,
+  pitchesToRestore,
+  type PitchCode,
+} from "@/lib/pitches";
 import { normalizePlay } from "@/lib/normalizePlay";
 import { describePlay, describeSituation, isSkip, matchAnswer, openQuestions, type ClarifyOption } from "@/lib/clarify";
 import { ClarifyPanel } from "@/components/ClarifyPanel";
@@ -37,7 +48,7 @@ import { parseShorthand } from "@/lib/shorthand";
 import { buildNameIndex, correctNames, loadPlayerNames } from "@/lib/correctNames";
 import { checkPlay } from "@/lib/checkPlay";
 import { buildParseContext } from "@/lib/parseContext";
-import { battingTeam, inningLabel, type LoggedPlay, type Team } from "@/lib/boxScore";
+import { battingTeam, inningLabel, isPlateAppearance, type LoggedPlay, type Team } from "@/lib/boxScore";
 import {
   EMPTY_LINEUPS,
   applyLineup,
@@ -90,6 +101,8 @@ interface SavedGame {
   pitchCounts?: Record<string, number>;
   // scheduled innings; missing means nine
   innings?: number;
+  // the pitches of the at bat in progress
+  pendingPitches?: PitchCode[];
 }
 
 function loadSavedGame(): SavedGame | null {
@@ -102,6 +115,9 @@ function loadSavedGame(): SavedGame | null {
     return null;
   }
 }
+
+// the pitches a scorer logs by hand; in play and hit by pitch come with the play
+const PITCH_KEYS: PitchCode[] = ["B", "C", "S", "F", "T"];
 
 const isTyping = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
@@ -141,6 +157,11 @@ const Index = () => {
   const [editing, setEditing] = useState<number | null>(null);
   // later plays that stopped adding up after an edit
   const [problems, setProblems] = useState<ReplayProblem[]>([]);
+  // every pitch of the at bat in progress, until the play that ends it
+  const [pendingPitches, setPendingPitches] = useState<PitchCode[]>(restored?.pendingPitches ?? []);
+  const count = countOf(pendingPitches);
+  // the play-by-play row the pointer is on, lit up on the spray chart
+  const [hoveredPlay, setHoveredPlay] = useState<number | null>(null);
 
   const confirmedPlays = log.map((e) => e.play);
 
@@ -166,6 +187,19 @@ const Index = () => {
     : dueUp[batting];
   const atBat = hasBattingOrder(lineups[batting]) ? currentBatter(lineups[batting], dueUp[batting]) : null;
   const pitcherNow = currentPitcher(lineups[fielding]);
+  // the pitcher's count so far: confirmed plays (and taps), plus the at bat
+  // in progress
+  const pitchesNow = useMemo(() => {
+    if (!pitcherNow) return undefined;
+    const line = pitching.find((p) => p.team === fielding && p.name.toLowerCase() === pitcherNow.toLowerCase());
+    const tapped = pitchCounts[pitcherKey(fielding, pitcherNow)] ?? 0;
+    const strikesNow = pendingPitches.filter(isStrike).length;
+    const logged = line?.strikes != null || pendingPitches.length > 0;
+    return {
+      pitches: (line?.pitches ?? tapped) + pendingPitches.length,
+      strikes: logged ? (line?.strikes ?? 0) + strikesNow : null,
+    };
+  }, [pitcherNow, pitching, fielding, pitchCounts, pendingPitches]);
 
   // the player list loads once, after the page, and is ready long before the
   // first play is spoken. lineup names go first so a player on today's card
@@ -205,12 +239,13 @@ const Index = () => {
         markedUp,
         pitchCounts,
         innings,
+        pendingPitches,
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
     } catch {
       // private windows can refuse storage; the game still works, it just won't survive a refresh
     }
-  }, [log, gameState, teamNames, startedAt, savedCount, lineups, markedUp, pitchCounts, innings]);
+  }, [log, gameState, teamNames, startedAt, savedCount, lineups, markedUp, pitchCounts, innings, pendingPitches]);
 
   const ensureGame = async () => {
     if (!gameRequest.current) {
@@ -325,6 +360,12 @@ const Index = () => {
       toast("The game is over. Undo or edit a play to change it, or start a new game.");
       return;
     }
+    // a single pitch ("ball", "strike swinging", "foul") goes on the count
+    const pitch = editing == null ? parsePitch(rawTranscript) : null;
+    if (pitch) {
+      addPitch(pitch);
+      return;
+    }
     const started = performance.now();
     const transcript = correctNames(rawTranscript, nameIndex);
     setLastTranscript(transcript);
@@ -403,8 +444,12 @@ const Index = () => {
     // the play is accepted locally first so the scoreboard never waits on the
     // network; persistence catches up behind it. the readings the scorer
     // already chose between aren't part of the record
-    const play: Play = { ...currentPlay, alternatives: null };
+    let play: Play = { ...currentPlay, alternatives: null };
     if (editing != null) {
+      // the pitches were logged as they were thrown; scoring the result again
+      // doesn't change them
+      const original = log[editing]?.play;
+      play = { ...play, pitches: original?.pitches ?? null, count: original?.count ?? play.count };
       applyEdit(editing, { play, slot: pendingSlot }, "Play updated");
       setCurrentPlay(null);
       setWarnings([]);
@@ -415,6 +460,16 @@ const Index = () => {
     const before = gameState;
     const after = applyPlayToState(before, play, innings);
     const slot = pendingSlot;
+
+    // the at bat's pitches go onto the play that ended it, with the count it
+    // ended on; a steal or a pickoff leaves the count where it is
+    const halfOver = !!after.final || after.half !== before.half || after.inning !== before.inning;
+    const pitches = pitchesForPlay(play, pendingPitches, { endsHalf: halfOver, said: reviewBase?.transcript });
+    if (pitches.length) {
+      const ended = isPlateAppearance(play.action) ? pitches.slice(0, -1) : pitches;
+      play = { ...play, pitches, count: pendingPitches.length ? formatCount(countOf(ended)) : play.count ?? null };
+    }
+    if (isPlateAppearance(play.action) || halfOver) setPendingPitches([]);
 
     setLog((prev) => [...prev, { play, before, after, slot }]);
     setGameState(after);
@@ -520,6 +575,8 @@ const Index = () => {
     const playIndex = log.length - 1;
     setLog((prev) => prev.slice(0, -1));
     setGameState(last.before);
+    // the at bat it ended is back in progress, unless the next one has begun
+    if (pendingPitches.length === 0) setPendingPitches(pitchesToRestore(last.play));
     setProblems((prev) => prev.filter((p) => p.index < playIndex));
     toast(`Undid: ${last.play.description}`);
 
@@ -546,6 +603,7 @@ const Index = () => {
     setLineups(EMPTY_LINEUPS);
     setMarkedUp(NOBODY_MARKED);
     setPitchCounts({});
+    setPendingPitches([]);
     setPendingSlot(null);
     setReviewBase(null);
     setResolved([]);
@@ -553,6 +611,29 @@ const Index = () => {
     setProblems([]);
     setInnings(REGULATION_INNINGS);
     toast.success("New game started!");
+  };
+
+  // one pitch on the count. ball four or strike three puts the walk or the
+  // strikeout up for review, with the pitch that decided it already logged
+  const addPitch = (code: PitchCode) => {
+    if (gameState.final) return toast("The game is over.");
+    if (editing != null) return toast("Finish or cancel the edit first.");
+    if (currentPlay) return toast("Confirm or reject the play under review first.");
+    const next = [...pendingPitches, code];
+    setPendingPitches(next);
+    const outcome = decided(next);
+    if (!outcome) return;
+    const words = outcome === "walk" ? "ball four" : code === "C" ? "strike three looking" : "strike three swinging";
+    const play = parseShorthand(outcome === "walk" ? "walk" : code === "C" ? "K looking" : "K swinging", gameState);
+    if (play) {
+      setLastTranscript(words);
+      showPlay(play, { source: "shorthand", ms: 0 }, words);
+    }
+  };
+
+  const undoPitch = () => {
+    if (currentPlay) return toast("Confirm or reject the play under review first.");
+    setPendingPitches((prev) => prev.slice(0, -1));
   };
 
   const handleLineup = (team: Team, lineup: TeamLineup) => setLineups((prev) => ({ ...prev, [team]: lineup }));
@@ -573,7 +654,15 @@ const Index = () => {
   // question is open the number keys pick its answers
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!currentPlay || isTyping(e.target)) return;
+      if (isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+      // B, C, S, F, T log a pitch while nothing is up for review
+      const key = e.key.toUpperCase();
+      if (!currentPlay && editing == null && PITCH_KEYS.includes(key as PitchCode)) {
+        e.preventDefault();
+        addPitch(key as PitchCode);
+        return;
+      }
+      if (!currentPlay) return;
       if (question && /^[1-9]$/.test(e.key)) {
         const option = question.options[Number(e.key) - 1];
         if (option) {
@@ -713,7 +802,8 @@ const Index = () => {
           teamNames={shownTeams}
           atBat={atBat}
           pitcher={pitcherNow}
-          pitches={pitcherNow ? pitchCounts[pitcherKey(fielding, pitcherNow)] ?? 0 : null}
+          pitches={pitchesNow?.pitches ?? null}
+          count={count}
         />
         <LineScore log={log} state={gameState} teamNames={shownTeams} innings={innings} />
 
@@ -786,6 +876,47 @@ const Index = () => {
                   Score
                 </Button>
               </form>
+
+              {/* pitch by pitch: every pitch of the at bat goes on the count,
+                  and onto the play that ends it */}
+              <div className="max-w-md mx-auto space-y-2" aria-label="Pitches">
+                <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span>
+                    Count <span className="font-semibold text-foreground tabular-nums">{formatCount(count)}</span>
+                    {pendingPitches.length > 0 && (
+                      <span className="ml-2 font-mono tracking-wider" title={pendingPitches.map((p) => PITCH_LABELS[p]).join(", ")}>
+                        {pendingPitches.join(" ")}
+                      </span>
+                    )}
+                  </span>
+                  {pendingPitches.length > 0 && (
+                    <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={undoPitch} disabled={!!currentPlay}>
+                      <Undo2 className="w-3.5 h-3.5 mr-1" /> Undo pitch
+                    </Button>
+                  )}
+                </div>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {PITCH_KEYS.map((code) => (
+                    <Button
+                      key={code}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-auto py-1.5 flex-col gap-0 text-xs whitespace-normal leading-tight"
+                      onClick={() => addPitch(code)}
+                      disabled={!!currentPlay || editing != null || !!gameState.final || isProcessing}
+                      title={`${PITCH_LABELS[code]} (key ${code})`}
+                    >
+                      <span>{PITCH_LABELS[code]}</span>
+                      <kbd className="text-[10px] font-mono text-muted-foreground">{code}</kbd>
+                    </Button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted-foreground text-center">
+                  Or say it: "ball", "strike looking", "swinging strike", "foul". Then call the play when the ball is put in
+                  play.
+                </p>
+              </div>
             </div>
 
             {/* Transcript shown while processing */}
@@ -851,6 +982,7 @@ const Index = () => {
               dueUp={dueUp}
               pitching={pitching}
               pitchCounts={pitchCounts}
+              pitchesNow={pitchesNow}
               onChange={handleLineup}
               onMarkDueUp={handleMarkDueUp}
               onPitch={handlePitch}
@@ -896,11 +1028,16 @@ const Index = () => {
                     return (
                       <div
                         key={index}
+                        onMouseEnter={() => setHoveredPlay(index)}
+                        onMouseLeave={() => setHoveredPlay((h) => (h === index ? null : h))}
                         className={`group rounded-lg p-3 text-sm flex items-center gap-3 ${
                           editing === index ? "bg-primary/10 ring-2 ring-primary/40" : "bg-muted"
                         }`}
                       >
-                        <span className="shrink-0 w-8 text-xs text-muted-foreground tabular-nums">{inningLabel(before)}</span>
+                        <span className="shrink-0 w-10 text-xs text-muted-foreground tabular-nums leading-tight">
+                          <span className="block">#{index + 1}</span>
+                          {inningLabel(before)}
+                        </span>
                         <span className="shrink-0 text-xs bg-primary text-primary-foreground rounded px-2 py-0.5 uppercase font-bold">
                           {play.action}
                         </span>
@@ -909,6 +1046,12 @@ const Index = () => {
                           {play.hit_type && play.hit_location && (
                             <span className="text-muted-foreground text-xs ml-2">
                               — {play.hit_type} to {play.hit_location}
+                            </span>
+                          )}
+                          {play.pitches && play.pitches.length > 0 && (
+                            <span className="block text-xs text-muted-foreground font-mono tracking-wider" title="Pitches, in order">
+                              {play.count ? `${play.count} · ` : ""}
+                              {play.pitches.join(" ")}
                             </span>
                           )}
                         </span>
@@ -965,7 +1108,7 @@ const Index = () => {
             </div>
 
             {/* Spray Chart */}
-            <SprayChart plays={confirmedPlays} teamNames={shownTeams} />
+            <SprayChart plays={confirmedPlays} teamNames={shownTeams} batting={batting} highlight={hoveredPlay} />
           </section>
         </div>
       </main>

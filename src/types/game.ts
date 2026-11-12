@@ -41,6 +41,10 @@ export interface Play {
   // other actions the words could equally mean, when the parser saw more than
   // one reading; the scorer is asked to pick
   alternatives?: string[] | null;
+  // every pitch of the plate appearance, in order (see src/lib/pitches.ts):
+  // B ball, C called strike, S swinging strike, F foul, T foul tip, X in
+  // play, H hit by pitch. Missing on plays scored without pitches
+  pitches?: string[] | null;
 }
 
 export const INITIAL_GAME_STATE: GameState = {
