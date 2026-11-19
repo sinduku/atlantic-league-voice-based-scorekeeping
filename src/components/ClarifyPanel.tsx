@@ -24,7 +24,7 @@ export function ClarifyPanel({ question, remaining, answered, onPick, onText, on
     <section
       aria-label="A detail the play needs"
       aria-live="polite"
-      className="rounded-xl border-2 border-primary/40 bg-primary/5 p-4 space-y-3"
+      className="rounded-xl border-2 border-primary/40 bg-primary/5 p-3 space-y-2"
     >
       <div className="flex items-center justify-between gap-3">
         <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
@@ -47,7 +47,7 @@ export function ClarifyPanel({ question, remaining, answered, onPick, onText, on
             key={option.id}
             variant="outline"
             onClick={() => onPick(option)}
-            className={`h-auto min-h-10 justify-start whitespace-normal text-left py-2 ${option.likely ? "border-primary/60" : ""}`}
+            className={`h-auto min-h-9 justify-start whitespace-normal text-left py-2 ${option.likely ? "border-primary/60" : ""}`}
           >
             {i < 9 && (
               <kbd className="mr-2 shrink-0 rounded border bg-muted px-1.5 text-[11px] font-mono text-muted-foreground">

@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Download, FileSpreadsheet, FileText, Keyboard, Pencil, RotateCcw, Trash2, Undo2, X } from "lucide-react";
+import { Download, FileSpreadsheet, FileText, Flag, Keyboard, Pencil, RotateCcw, Trash2, Undo2, X } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ChallengeDialog } from "@/components/ChallengeDialog";
+import { Scorecard } from "@/components/Scorecard";
+import { challengeCounts, challengeLabel } from "@/lib/challenges";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
 import { PlayCard } from "@/components/PlayCard";
 import { SprayChart } from "@/components/SprayChart";
@@ -41,7 +45,8 @@ import {
   pitchesToRestore,
   type PitchCode,
 } from "@/lib/pitches";
-import { normalizePlay } from "@/lib/normalizePlay";
+import { normalizePlay, zoneFor } from "@/lib/normalizePlay";
+import { describeSpot } from "@/lib/sprayGeometry";
 import { describePlay, describeSituation, isSkip, matchAnswer, openQuestions, type ClarifyOption } from "@/lib/clarify";
 import { ClarifyPanel } from "@/components/ClarifyPanel";
 import { parseShorthand } from "@/lib/shorthand";
@@ -63,7 +68,7 @@ import {
 } from "@/lib/lineup";
 import { pitcherKey, pitchingLines } from "@/lib/pitching";
 import { battingCsv, downloadCsv, fileBaseName, pitchingCsv, playByPlayCsv, type GameInfo } from "@/lib/exportCsv";
-import { type Play, type GameState, INITIAL_GAME_STATE, REGULATION_INNINGS, applyPlayToState } from "@/types/game";
+import { type Challenge, type Play, type GameState, INITIAL_GAME_STATE, REGULATION_INNINGS, applyPlayToState } from "@/types/game";
 
 // VITE_PARSE_URL points straight at a deployed endpoint - the GitHub Pages
 // build uses the Supabase edge function, since a static site cannot hold the
@@ -162,6 +167,8 @@ const Index = () => {
   const count = countOf(pendingPitches);
   // the play-by-play row the pointer is on, lit up on the spray chart
   const [hoveredPlay, setHoveredPlay] = useState<number | null>(null);
+  const [fieldTab, setFieldTab] = useState<"spray" | "scorecard">("spray");
+  const [logTab, setLogTab] = useState<"plays" | "lineups">("plays");
 
   const confirmedPlays = log.map((e) => e.play);
 
@@ -187,6 +194,9 @@ const Index = () => {
     : dueUp[batting];
   const atBat = hasBattingOrder(lineups[batting]) ? currentBatter(lineups[batting], dueUp[batting]) : null;
   const pitcherNow = currentPitcher(lineups[fielding]);
+  // the scorecard shows the side at bat, and follows it when the side changes
+  const [cardTeam, setCardTeam] = useState<Team>(batting);
+  useEffect(() => setCardTeam(batting), [batting]);
   // the pitcher's count so far: confirmed plays (and taps), plus the at bat
   // in progress
   const pitchesNow = useMemo(() => {
@@ -449,7 +459,12 @@ const Index = () => {
       // the pitches were logged as they were thrown; scoring the result again
       // doesn't change them
       const original = log[editing]?.play;
-      play = { ...play, pitches: original?.pitches ?? null, count: original?.count ?? play.count };
+      play = {
+        ...play,
+        pitches: original?.pitches ?? null,
+        count: original?.count ?? play.count,
+        challenge: original?.challenge ?? null,
+      };
       applyEdit(editing, { play, slot: pendingSlot }, "Play updated");
       setCurrentPlay(null);
       setWarnings([]);
@@ -547,6 +562,50 @@ const Index = () => {
     setPendingSlot(null);
     setLastTranscript("");
     toast(`Say or type play #${index + 1} the way it really happened.`);
+  };
+
+  // a spray chart dot dragged to where the ball really went: the play keeps
+  // the spot, and its location in the log follows. null puts it back
+  const handleSprayMove = async (index: number, point: { x: number; y: number } | null) => {
+    const entry = log[index];
+    if (!entry) return;
+    const old = entry.play;
+    let play: Play;
+    if (point) {
+      const where = describeSpot(point);
+      const was = old.spray ? old.spray.was ?? null : old.hit_location ?? null;
+      play = { ...old, spray: { ...point, was }, hit_location: where, field_zone: zoneFor(where, old.fielders_involved) };
+    } else {
+      const was = old.spray?.was ?? old.hit_location ?? null;
+      play = { ...old, spray: null, hit_location: was, field_zone: zoneFor(was, old.fielders_involved) };
+    }
+    const next = log.map((e, i) => (i === index ? { ...e, play } : e));
+    setLog(next);
+    toast(point ? `Play #${index + 1} moved to ${play.hit_location}.` : `Play #${index + 1} is back where the words put it.`);
+    if (gameId.current) {
+      const saved = await replacePlaysFrom(gameId.current, index, next.slice(index).map((e) => e.play));
+      if ("error" in saved) setSaveError(saved.error);
+    }
+  };
+
+  // a manager's challenge on a play. An overturned call goes straight on to
+  // scoring the play again the way the review saw it
+  const handleChallenge = async (index: number, challenge: Challenge | null) => {
+    const entry = log[index];
+    if (!entry) return;
+    const newlyOverturned = challenge?.result === "overturned" && entry.play.challenge?.result !== "overturned";
+    const next = log.map((e, i) => (i === index ? { ...e, play: { ...e.play, challenge } } : e));
+    setLog(next);
+    if (newlyOverturned) {
+      // the edit says what to do next
+      handleEdit(index);
+    } else {
+      toast(challenge ? `Challenge recorded on play #${index + 1}.` : `Challenge removed from play #${index + 1}.`);
+    }
+    if (gameId.current) {
+      const saved = await replacePlaysFrom(gameId.current, index, next.slice(index).map((e) => e.play));
+      if ("error" in saved) setSaveError(saved.error);
+    }
   };
 
   const handleCancelEdit = () => {
@@ -694,26 +753,65 @@ const Index = () => {
   const setTeam = (team: Team, name: string) => setTeamNames((prev) => ({ ...prev, [team]: name }));
   const info = (): GameInfo => ({ teamNames: shownTeams, date: new Date(startedAt), pitchCounts, innings });
 
+  const panelTab = "data-[state=active]:bg-background data-[state=active]:shadow-sm text-xs";
+  const challenges = challengeCounts(confirmedPlays);
+
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b bg-primary text-primary-foreground">
-        <div className="max-w-7xl mx-auto px-4 py-4 lg:px-8 flex flex-wrap items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-accent flex items-center justify-center text-accent-foreground font-bold text-sm">
-            ⚾
-          </div>
-          <div className="flex-1 min-w-[10rem]">
-            <h1 className="text-lg font-bold tracking-tight">Voice Scorekeeper</h1>
-            <p className="text-xs opacity-75">Atlantic League Baseball</p>
+    <div className="min-h-screen lg:h-screen flex flex-col bg-background lg:overflow-hidden">
+      {/* Header: the game's teams and the game-wide actions, on one line */}
+      <header className="shrink-0 border-b bg-primary text-primary-foreground">
+        <div className="px-3 py-2 lg:px-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <div className="flex items-center gap-2 mr-1">
+            <div className="w-7 h-7 rounded-full bg-accent flex items-center justify-center text-accent-foreground font-bold text-sm">⚾</div>
+            <div className="leading-tight">
+              <h1 className="text-base font-bold tracking-tight">Voice Scorekeeper</h1>
+              <p className="text-[11px] opacity-75">Atlantic League Baseball</p>
+            </div>
           </div>
 
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={handleUndo}
-            disabled={log.length === 0 || editing != null}
-            title="Take back the last confirmed play"
-          >
+          <div className="flex flex-wrap items-center gap-1.5 text-sm min-w-0">
+            <Input
+              aria-label="Away team"
+              value={teamNames.away}
+              onChange={(e) => setTeam("away", e.target.value)}
+              placeholder="Away team"
+              className="h-8 w-36 sm:w-40 font-semibold bg-primary-foreground text-foreground"
+            />
+            <span className="opacity-75">at</span>
+            <Input
+              aria-label="Home team"
+              value={teamNames.home}
+              onChange={(e) => setTeam("home", e.target.value)}
+              placeholder="Home team"
+              className="h-8 w-36 sm:w-40 font-semibold bg-primary-foreground text-foreground"
+            />
+            <label className="flex items-center gap-1.5 ml-1 opacity-90">
+              Innings
+              <select
+                value={innings}
+                onChange={(e) => handleInnings(Number(e.target.value))}
+                className="h-8 rounded-md border bg-primary-foreground px-1.5 text-foreground"
+                title="Scheduled innings. Seven for the second game of a doubleheader"
+              >
+                <option value={9}>9</option>
+                <option value={7}>7</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="flex-1" />
+
+          {/* whether confirmed plays are reaching the database */}
+          {(savedCount > 0 || saveError) && (
+            <span
+              className={`text-[11px] max-w-[16rem] truncate rounded px-2 py-1 ${saveError ? "bg-destructive text-destructive-foreground" : "opacity-75"}`}
+              title={saveError ?? undefined}
+            >
+              {saveError ? `Not saving: ${saveError}` : `${savedCount} ${savedCount === 1 ? "play" : "plays"} saved`}
+            </span>
+          )}
+
+          <Button size="sm" variant="secondary" onClick={handleUndo} disabled={log.length === 0 || editing != null} title="Take back the last confirmed play">
             <Undo2 className="w-4 h-4 mr-1" /> Undo
           </Button>
 
@@ -764,122 +862,76 @@ const Index = () => {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-6 lg:px-8 space-y-6">
-        {/* Teams */}
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <Input
-            aria-label="Away team"
-            value={teamNames.away}
-            onChange={(e) => setTeam("away", e.target.value)}
-            placeholder="Away team"
-            className="w-44 font-semibold"
+      {/* Everything on one screen on a laptop: scoring on the left, the field
+          and the scorecard in the middle, the play-by-play and lineups on the
+          right. Each column scrolls on its own if it has to, the page never
+          does. Phones stack the columns in the same order */}
+      <main className="flex-1 min-h-0 grid grid-cols-1 gap-3 p-3 lg:grid-cols-[22rem_minmax(0,1fr)] xl:grid-cols-[23rem_minmax(0,1fr)_24rem] 2xl:grid-cols-[26rem_minmax(0,1fr)_28rem]">
+        {/* ------------------------------------------------ scoring */}
+        <section className="min-h-0 flex flex-col gap-3 lg:overflow-y-auto lg:pr-0.5" aria-label="Score a play">
+          <Scoreboard
+            state={gameState}
+            teamNames={shownTeams}
+            atBat={atBat}
+            pitcher={pitcherNow}
+            pitches={pitchesNow?.pitches ?? null}
+            count={count}
           />
-          <span className="text-muted-foreground">at</span>
-          <Input
-            aria-label="Home team"
-            value={teamNames.home}
-            onChange={(e) => setTeam("home", e.target.value)}
-            placeholder="Home team"
-            className="w-44 font-semibold"
-          />
-          <label className="flex items-center gap-2 text-muted-foreground ml-2">
-            Innings
-            <select
-              value={innings}
-              onChange={(e) => handleInnings(Number(e.target.value))}
-              className="h-9 rounded-md border bg-background px-2 text-foreground"
-              title="Scheduled innings. Seven for the second game of a doubleheader"
-            >
-              <option value={9}>9</option>
-              <option value={7}>7</option>
-            </select>
-          </label>
-        </div>
 
-        {/* Scoreboard */}
-        <Scoreboard
-          state={gameState}
-          teamNames={shownTeams}
-          atBat={atBat}
-          pitcher={pitcherNow}
-          pitches={pitchesNow?.pitches ?? null}
-          count={count}
-        />
-        <LineScore log={log} state={gameState} teamNames={shownTeams} innings={innings} />
-
-        {/* Whether confirmed plays are actually reaching the database */}
-        {(savedCount > 0 || saveError) && (
-          <div
-            className={`rounded-lg px-3 py-2 text-xs ${
-              saveError ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"
-            }`}
-          >
-            {saveError
-              ? `Not saving to database: ${saveError}`
-              : `${savedCount} ${savedCount === 1 ? "play" : "plays"} saved to database`}
-          </div>
-        )}
-
-        {/* two columns on wide screens: scoring on the left, the game so far on
-            the right. phones stack them in the same order */}
-        <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
-          <section className="space-y-6" aria-label="Score a play">
-            {editing != null && editedEntry && (
-              <div className="rounded-xl border-2 border-primary/40 bg-primary/5 p-4 flex items-start gap-3" role="status">
-                <Pencil className="w-4 h-4 mt-0.5 shrink-0 text-primary" />
-                <div className="flex-1 text-sm">
-                  <p className="font-semibold">
-                    Editing play #{editing + 1} ({inningLabel(editedEntry.before)}, {describeSituation(editedEntry.before)})
-                  </p>
-                  <p className="text-muted-foreground">
-                    Was: {editedEntry.play.description}. Say or type what really happened; every play after it is worked out
-                    again when you confirm.
-                  </p>
-                </div>
-                <Button size="sm" variant="ghost" onClick={handleCancelEdit}>
-                  <X className="w-4 h-4 mr-1" /> Cancel
-                </Button>
-              </div>
-            )}
-
-            {gameState.final && editing == null && (
-              <div className="rounded-xl border bg-muted p-4 text-sm" role="status">
+          {editing != null && editedEntry && (
+            <div className="rounded-xl border-2 border-primary/40 bg-primary/5 p-3 flex items-start gap-2" role="status">
+              <Pencil className="w-4 h-4 mt-0.5 shrink-0 text-primary" />
+              <div className="flex-1 text-sm">
                 <p className="font-semibold">
-                  Final: {shownTeams.away} {gameState.score.away}, {shownTeams.home} {gameState.score.home}
+                  Editing play #{editing + 1} ({inningLabel(editedEntry.before)}, {describeSituation(editedEntry.before)})
                 </p>
-                <p className="text-muted-foreground">
-                  The game is over. Edit or undo a play to change it, or export the game.
+                <p className="text-muted-foreground text-xs">
+                  Was: {editedEntry.play.description}. Say or type what really happened; every play after it is worked out
+                  again when you confirm.
                 </p>
               </div>
-            )}
+              <Button size="sm" variant="ghost" className="h-7" onClick={handleCancelEdit}>
+                <X className="w-4 h-4 mr-1" /> Cancel
+              </Button>
+            </div>
+          )}
 
-            {/* Voice recorder */}
-            <div className="bg-card border rounded-xl p-6 space-y-5">
-              <VoiceRecorder onTranscriptReady={handleTranscript} isProcessing={isProcessing} />
+          {gameState.final && editing == null && (
+            <div className="rounded-xl border bg-muted p-3 text-sm" role="status">
+              <p className="font-semibold">
+                Final: {shownTeams.away} {gameState.score.away}, {shownTeams.home} {gameState.score.home}
+              </p>
+              <p className="text-muted-foreground text-xs">The game is over. Edit or undo a play to change it, or export the game.</p>
+            </div>
+          )}
 
-              {/* typing is the fallback when the mic or the room won't cooperate */}
-              <form onSubmit={handleTyped} className="flex gap-2 max-w-md mx-auto">
-                <div className="relative flex-1">
-                  <Keyboard className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    value={typed}
-                    onChange={(e) => setTyped(e.target.value)}
-                    placeholder={
-                      question ? 'Answer here: "scored", "third", "held"' : 'Or type a play: "6-3", "Judge doubles to left"'
-                    }
-                    className="pl-9"
-                    aria-label="Type a play"
-                    disabled={isProcessing}
-                  />
-                </div>
-                <Button type="submit" variant="outline" disabled={!typed.trim() || isProcessing}>
-                  Score
-                </Button>
-              </form>
+          {/* Voice, typing and pitches */}
+          <div className="bg-card border rounded-xl p-3 space-y-3">
+            <VoiceRecorder onTranscriptReady={handleTranscript} isProcessing={isProcessing} />
 
-              {/* pitch by pitch: every pitch of the at bat goes on the count,
-                  and onto the play that ends it */}
-              <div className="max-w-md mx-auto space-y-2" aria-label="Pitches">
+            {/* typing is the fallback when the mic or the room won't cooperate */}
+            <form onSubmit={handleTyped} className="flex gap-2">
+              <div className="relative flex-1">
+                <Keyboard className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={typed}
+                  onChange={(e) => setTyped(e.target.value)}
+                  placeholder={question ? 'Answer here: "scored", "third", "held"' : 'Or type a play: "6-3", "Judge doubles to left"'}
+                  className="pl-9"
+                  aria-label="Type a play"
+                  disabled={isProcessing}
+                />
+              </div>
+              <Button type="submit" variant="outline" disabled={!typed.trim() || isProcessing}>
+                Score
+              </Button>
+            </form>
+
+            {/* pitch by pitch: every pitch of the at bat goes on the count, and
+                onto the play that ends it. Out of the way while a play is up
+                for review */}
+            {!currentPlay && (
+              <div className="space-y-1.5" aria-label="Pitches">
                 <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                   <span>
                     Count <span className="font-semibold text-foreground tabular-nums">{formatCount(count)}</span>
@@ -890,7 +942,7 @@ const Index = () => {
                     )}
                   </span>
                   {pendingPitches.length > 0 && (
-                    <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={undoPitch} disabled={!!currentPlay}>
+                    <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={undoPitch}>
                       <Undo2 className="w-3.5 h-3.5 mr-1" /> Undo pitch
                     </Button>
                   )}
@@ -902,108 +954,152 @@ const Index = () => {
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="h-auto py-1.5 flex-col gap-0 text-xs whitespace-normal leading-tight"
+                      className="h-auto py-1.5 px-1 flex-col gap-0 text-xs whitespace-normal leading-tight"
                       onClick={() => addPitch(code)}
-                      disabled={!!currentPlay || editing != null || !!gameState.final || isProcessing}
-                      title={`${PITCH_LABELS[code]} (key ${code})`}
+                      disabled={editing != null || !!gameState.final || isProcessing}
+                      title={`${PITCH_LABELS[code]} (key ${code}). Or say it: "ball", "strike looking", "foul"`}
                     >
                       <span>{PITCH_LABELS[code]}</span>
                       <kbd className="text-[10px] font-mono text-muted-foreground">{code}</kbd>
                     </Button>
                   ))}
                 </div>
-                <p className="text-[11px] text-muted-foreground text-center">
-                  Or say it: "ball", "strike looking", "swinging strike", "foul". Then call the play when the ball is put in
-                  play.
-                </p>
               </div>
+            )}
+          </div>
+
+          {/* Transcript shown while processing */}
+          {isProcessing && lastTranscript && (
+            <div className="bg-muted rounded-lg px-3 py-2 text-sm animate-pulse">
+              <span className="text-xs uppercase tracking-wider text-muted-foreground mr-2">Processing</span>"{lastTranscript}"
+            </div>
+          )}
+
+          {/* Current play for review */}
+          {currentPlay && (
+            <div>
+              <div className="flex items-baseline justify-between gap-3 mb-1.5">
+                <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Review this play</h2>
+                {parseInfo && (
+                  <span className="text-xs text-muted-foreground">
+                    {parseInfo.source === "shorthand" ? "Shorthand" : "AI"} · {(parseInfo.ms / 1000).toFixed(1)}s
+                  </span>
+                )}
+              </div>
+              {lastTranscript && <p className="text-xs text-muted-foreground mb-2">Heard: "{lastTranscript}"</p>}
+              {warnings.length > 0 && (
+                <ul className="mb-2 rounded-lg bg-warning/15 text-foreground text-sm px-3 py-2 space-y-1 list-disc list-inside">
+                  {warnings.map((w) => (
+                    <li key={w}>{w}</li>
+                  ))}
+                </ul>
+              )}
+              {question && (
+                <div className="mb-2">
+                  <ClarifyPanel
+                    key={question.id}
+                    question={question}
+                    remaining={questions.length}
+                    answered={resolved.length - (reviewBase?.resolved.length ?? 0)}
+                    onPick={handlePick}
+                    onText={(text) => handleAnswerText(text)}
+                    onSkip={handleSkip}
+                    onStartOver={handleStartOver}
+                  />
+                </div>
+              )}
+              <PlayCard play={currentPlay} onConfirm={handleConfirm} onReject={handleReject} confirmDisabled={mustAnswer} />
+              <p className="text-xs text-muted-foreground mt-1.5 text-center">
+                {mustAnswer ? "Answer above to confirm · Esc to reject" : "Enter to confirm · Esc to reject"}
+              </p>
+            </div>
+          )}
+        </section>
+
+        {/* ------------------------------------------------ the field */}
+        <section className="min-h-0 flex flex-col gap-3" aria-label="The game">
+          <LineScore log={log} state={gameState} teamNames={shownTeams} innings={innings} />
+
+          <Tabs value={fieldTab} onValueChange={(v) => setFieldTab(v as "spray" | "scorecard")} className="flex-1 min-h-0 flex flex-col bg-card border rounded-xl p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+              <TabsList className="h-8">
+                <TabsTrigger value="spray" className={panelTab}>
+                  Spray chart
+                </TabsTrigger>
+                <TabsTrigger value="scorecard" className={panelTab}>
+                  Scorecard
+                </TabsTrigger>
+              </TabsList>
+              {fieldTab === "scorecard" && (
+                <div className="flex rounded-md border overflow-hidden text-xs" role="group" aria-label="Scorecard for">
+                  {(["away", "home"] as Team[]).map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => setCardTeam(t)}
+                      className={`px-2.5 py-1 max-w-[9rem] truncate ${cardTeam === t ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                      aria-pressed={cardTeam === t}
+                    >
+                      {shownTeams[t]}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <TabsContent value="spray" className="mt-0 flex-1 min-h-0 overflow-y-auto">
+              <SprayChart
+                plays={confirmedPlays}
+                teamNames={shownTeams}
+                batting={batting}
+                highlight={hoveredPlay}
+                runners={gameState.final ? undefined : gameState.runners}
+                onMove={handleSprayMove}
+                className="max-w-xl lg:max-h-[calc(100vh-20rem)]"
+                bare
+              />
+            </TabsContent>
+            <TabsContent value="scorecard" className="mt-0 flex-1 min-h-0 overflow-auto">
+              <Scorecard
+                log={log}
+                state={gameState}
+                team={cardTeam}
+                innings={innings}
+                highlight={hoveredPlay}
+                onHighlight={setHoveredPlay}
+                dueUp={dueUp[cardTeam]}
+              />
+            </TabsContent>
+          </Tabs>
+        </section>
+
+        {/* ------------------------------------------------ the game so far */}
+        <section className="min-h-0 flex flex-col lg:col-span-2 xl:col-span-1" aria-label="Game so far">
+          <Tabs value={logTab} onValueChange={(v) => setLogTab(v as "plays" | "lineups")} className="flex-1 min-h-0 flex flex-col bg-card border rounded-xl p-3">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <TabsList className="h-8">
+                <TabsTrigger value="plays" className={panelTab}>
+                  Play-by-play ({log.length})
+                </TabsTrigger>
+                <TabsTrigger value="lineups" className={panelTab}>
+                  Lineups
+                </TabsTrigger>
+              </TabsList>
+              {logTab === "plays" && log.length > 0 && (
+                <Button size="sm" variant="ghost" onClick={handleUndo} disabled={editing != null} className="h-7 text-xs">
+                  <Trash2 className="w-3.5 h-3.5 mr-1" /> Remove last
+                </Button>
+              )}
             </div>
 
-            {/* Transcript shown while processing */}
-            {isProcessing && lastTranscript && (
-              <div className="bg-muted rounded-lg p-4 text-sm animate-pulse">
-                <span className="text-xs uppercase tracking-wider text-muted-foreground block mb-1">
-                  Processing
-                </span>
-                <p>"{lastTranscript}"</p>
-              </div>
-            )}
-
-            {/* Current play for review */}
-            {currentPlay && (
-              <div>
-                <div className="flex items-baseline justify-between gap-3 mb-3">
-                  <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                    Review This Play
-                  </h2>
-                  {parseInfo && (
-                    <span className="text-xs text-muted-foreground">
-                      {parseInfo.source === "shorthand" ? "Shorthand" : "AI"} · {(parseInfo.ms / 1000).toFixed(1)}s
-                    </span>
-                  )}
-                </div>
-                {lastTranscript && (
-                  <p className="text-xs text-muted-foreground mb-3">Heard: "{lastTranscript}"</p>
-                )}
-                {warnings.length > 0 && (
-                  <ul className="mb-3 rounded-lg bg-warning/15 text-foreground text-sm px-4 py-3 space-y-1 list-disc list-inside">
-                    {warnings.map((w) => (
-                      <li key={w}>{w}</li>
-                    ))}
-                  </ul>
-                )}
-                {question && (
-                  <div className="mb-3">
-                    <ClarifyPanel
-                      key={question.id}
-                      question={question}
-                      remaining={questions.length}
-                      answered={resolved.length - (reviewBase?.resolved.length ?? 0)}
-                      onPick={handlePick}
-                      onText={(text) => handleAnswerText(text)}
-                      onSkip={handleSkip}
-                      onStartOver={handleStartOver}
-                    />
-                  </div>
-                )}
-                <PlayCard play={currentPlay} onConfirm={handleConfirm} onReject={handleReject} confirmDisabled={mustAnswer} />
-                <p className="text-xs text-muted-foreground mt-2 text-center">
-                  {mustAnswer ? "Answer above to confirm · Esc to reject" : "Enter to confirm · Esc to reject"}
+            <TabsContent value="plays" className="mt-0 flex-1 min-h-0 flex flex-col">
+              {(challenges.away.used > 0 || challenges.home.used > 0) && (
+                <p className="text-xs text-muted-foreground mb-2">
+                  Challenges: {(["away", "home"] as Team[])
+                    .map((t) => `${shownTeams[t]} ${challenges[t].used} (${challenges[t].overturned} overturned)`)
+                    .join(" · ")}
                 </p>
-              </div>
-            )}
-
-            {/* keyed by game so a reset opens both cards for entry again */}
-            <LineupPanel
-              key={startedAt}
-              lineups={lineups}
-              teamNames={shownTeams}
-              batting={batting}
-              dueUp={dueUp}
-              pitching={pitching}
-              pitchCounts={pitchCounts}
-              pitchesNow={pitchesNow}
-              onChange={handleLineup}
-              onMarkDueUp={handleMarkDueUp}
-              onPitch={handlePitch}
-            />
-          </section>
-
-          <section className="space-y-6" aria-label="Game so far">
-            {/* Confirmed plays log */}
-            <div className="bg-card border rounded-xl p-6">
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                  Confirmed Plays ({log.length})
-                </h2>
-                {log.length > 0 && (
-                  <Button size="sm" variant="ghost" onClick={handleUndo} disabled={editing != null} className="h-7 text-xs">
-                    <Trash2 className="w-3.5 h-3.5 mr-1" /> Remove last
-                  </Button>
-                )}
-              </div>
+              )}
               {problems.length > 0 && (
-                <div className="mb-3 rounded-lg bg-warning/15 px-4 py-3 text-sm space-y-1">
+                <div className="mb-2 rounded-lg bg-warning/15 px-3 py-2 text-sm space-y-1">
                   <p className="font-semibold">After the change, these plays don't add up:</p>
                   <ul className="space-y-1">
                     {problems.map((p) => (
@@ -1020,47 +1116,67 @@ const Index = () => {
               {log.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No plays yet.</p>
               ) : (
-                <div className="space-y-2 lg:max-h-[28rem] lg:overflow-y-auto lg:pr-1">
+                <div className="space-y-1.5 flex-1 min-h-0 max-h-[32rem] lg:max-h-none overflow-y-auto pr-1">
                   {[...log].reverse().map(({ play, before, after }, i) => {
                     const index = log.length - 1 - i;
-                    const team = before.half === "top" ? "away" : "home";
+                    const team = battingTeam(before.half);
                     const runs = after.score[team] - before.score[team];
                     return (
                       <div
                         key={index}
                         onMouseEnter={() => setHoveredPlay(index)}
                         onMouseLeave={() => setHoveredPlay((h) => (h === index ? null : h))}
-                        className={`group rounded-lg p-3 text-sm flex items-center gap-3 ${
-                          editing === index ? "bg-primary/10 ring-2 ring-primary/40" : "bg-muted"
+                        className={`group rounded-lg px-2.5 py-2 text-sm flex items-start gap-2 ${
+                          editing === index ? "bg-primary/10 ring-2 ring-primary/40" : hoveredPlay === index ? "bg-amber-100" : "bg-muted"
                         }`}
                       >
-                        <span className="shrink-0 w-10 text-xs text-muted-foreground tabular-nums leading-tight">
+                        <span className="shrink-0 w-9 text-xs text-muted-foreground tabular-nums leading-tight pt-0.5">
                           <span className="block">#{index + 1}</span>
                           {inningLabel(before)}
                         </span>
-                        <span className="shrink-0 text-xs bg-primary text-primary-foreground rounded px-2 py-0.5 uppercase font-bold">
-                          {play.action}
-                        </span>
-                        <span className="text-foreground flex-1 min-w-0">
-                          {play.description}
-                          {play.hit_type && play.hit_location && (
-                            <span className="text-muted-foreground text-xs ml-2">
-                              — {play.hit_type} to {play.hit_location}
-                            </span>
-                          )}
+                        <span className="flex-1 min-w-0">
+                          <span className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[10px] bg-primary text-primary-foreground rounded px-1.5 py-0.5 uppercase font-bold">{play.action}</span>
+                            {runs > 0 && (
+                              <span className="text-xs text-accent font-bold">
+                                +{runs} {runs === 1 ? "run" : "runs"}
+                              </span>
+                            )}
+                          </span>
+                          <span className="block text-foreground leading-snug mt-0.5">
+                            {play.description}
+                            {play.hit_type && play.hit_location && (
+                              <span className="text-muted-foreground text-xs ml-1">
+                                — {play.hit_type} to {play.hit_location}
+                              </span>
+                            )}
+                          </span>
                           {play.pitches && play.pitches.length > 0 && (
                             <span className="block text-xs text-muted-foreground font-mono tracking-wider" title="Pitches, in order">
                               {play.count ? `${play.count} · ` : ""}
                               {play.pitches.join(" ")}
                             </span>
                           )}
+                          {play.challenge && (
+                            <span
+                              className={`mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium ${
+                                play.challenge.result === "overturned" ? "bg-amber-200 text-amber-900" : "bg-slate-200 text-slate-800"
+                              }`}
+                            >
+                              <Flag className="w-3 h-3" fill="currentColor" />
+                              {challengeLabel(play.challenge, shownTeams)}
+                            </span>
+                          )}
                         </span>
-                        {runs > 0 && (
-                          <span className="shrink-0 text-xs text-accent font-bold">
-                            +{runs} {runs === 1 ? "run" : "runs"}
-                          </span>
-                        )}
-                        <span className="shrink-0 flex gap-0.5">
+                        <span className="shrink-0 flex">
+                          <ChallengeDialog
+                            index={index}
+                            play={play}
+                            teamNames={shownTeams}
+                            fielding={team === "away" ? "home" : "away"}
+                            disabled={isProcessing || (editing != null && editing !== index)}
+                            onSave={handleChallenge}
+                          />
                           <Button
                             size="icon"
                             variant="ghost"
@@ -1105,12 +1221,27 @@ const Index = () => {
                   })}
                 </div>
               )}
-            </div>
+            </TabsContent>
 
-            {/* Spray Chart */}
-            <SprayChart plays={confirmedPlays} teamNames={shownTeams} batting={batting} highlight={hoveredPlay} />
-          </section>
-        </div>
+            {/* kept mounted, so a half-typed lineup survives switching tabs;
+                keyed by game so a reset opens both cards for entry again */}
+            <TabsContent value="lineups" forceMount className="mt-0 flex-1 min-h-0 overflow-y-auto data-[state=inactive]:hidden">
+              <LineupPanel
+                key={startedAt}
+                lineups={lineups}
+                teamNames={shownTeams}
+                batting={batting}
+                dueUp={dueUp}
+                pitching={pitching}
+                pitchCounts={pitchCounts}
+                pitchesNow={pitchesNow}
+                onChange={handleLineup}
+                onMarkDueUp={handleMarkDueUp}
+                onPitch={handlePitch}
+              />
+            </TabsContent>
+          </Tabs>
+        </section>
       </main>
     </div>
   );

@@ -1,6 +1,7 @@
 import { battingLines, battingTeam, type LoggedPlay, type Team } from "@/lib/boxScore";
 import { inningsPitched, pitchingLines } from "@/lib/pitching";
 import { sequence } from "@/lib/pitches";
+import { challengeLabel } from "@/lib/challenges";
 
 // Game exports as spreadsheets: one row per play, one per batter, one per pitcher.
 
@@ -32,7 +33,7 @@ export function playByPlayCsv(log: LoggedPlay[], info: GameInfo): string {
   const header = [
     "#", "Inning", "Half", "Batting", "Batter", "Pitcher", "Play", "Description", "Runners",
     "RBI", "Outs on play", "Runs", "Outs after", `${info.teamNames.away} score`, `${info.teamNames.home} score`,
-    "Fielders", "Hit type", "Hit location", "Contact", "Pitch", "Pitch location", "Count", "Pitches", "Confidence",
+    "Fielders", "Hit type", "Hit location", "Contact", "Pitch", "Pitch location", "Count", "Pitches", "Challenge", "Confidence",
   ];
   const rows = log.map(({ play, before, after }, i) => {
     const team = battingTeam(before.half);
@@ -61,6 +62,7 @@ export function playByPlayCsv(log: LoggedPlay[], info: GameInfo): string {
       play.pitch_location,
       play.count,
       sequence(play.pitches),
+      play.challenge ? challengeLabel(play.challenge, info.teamNames) : "",
       play.confidence,
     ];
   });

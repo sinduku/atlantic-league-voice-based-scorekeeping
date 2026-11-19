@@ -154,6 +154,23 @@ id that is also sent back to the browser (it's printed in the console when a pla
 fails), so a failed play can be found in the log. `GET /api/health?deep=1` also checks
 the AI provider accepts the key, for a host's health check.
 
+### Runners can't share a base
+
+Before a play is shown for review, `withForcedRunners` in `src/types/game.ts` fills in
+any runner the play forgot to move but who has to move: the man on first when the batter
+walks or singles, and so on up the bases, with the forced-in run and its rbi. A home run
+brings in everyone on base whether the play lists them or not. The AI often sends only
+the batter for "Soto walks", which used to leave runners vanishing and runs uncounted.
+
+### Stress test
+
+`src/lib/stress.test.ts` plays 500 random games (about 40,000 plays, a mix of shorthand
+and the incomplete plays the AI sends) through the same steps as the page, answering
+whatever the app asks at random, and checks after every play that no runner disappears
+or stands on two bases, the outs and score add up, and that the line score, batting runs,
+runs charged to pitchers, the scorecard and a replay of the whole log all agree. It runs
+with the rest of the tests in a few seconds.
+
 ### Player names
 
 ```bash
@@ -196,8 +213,24 @@ in `src/data/extra-players.txt`.
   bunts in front of the plate, doubles in the gaps and corners, triples at the wall.
   Each dot names its play number, and pointing at a play in the log lights it up.
   Filled dots are hits, hollow are outs
-- 👥 The spray chart and the lineup card show the team at bat, and switch when the
-  side changes
+- 👥 The spray chart, the scorecard and the lineup card show the team at bat, and switch
+  when the side changes
+- 🖥️ Everything on one screen on a laptop (1280 x 800 and up): scoring on the left, the
+  line score with the spray chart or scorecard in the middle, the play-by-play and
+  lineups on the right. Each column scrolls on its own if it has to; the page doesn't.
+  Confirm and Reject stay in view however long the play under review gets
+- 🏃 Runners on base shown on the spray chart with their names, and pointing at a play
+  in the log draws its runners' paths along the base paths (green scored, red put out)
+- ✋ Drag a dot on the spray chart to where the ball really went. The play keeps the
+  spot, its location in the log changes to match ("deep left-center gap"), and the PDF
+  uses it too. Double-click a moved dot to put it back
+- 📒 Scorecard view, like a paper scorebook: a box per batter per inning with the result
+  in scorebook notation (1B, 6-3, F8, ꓘ), the bases he went on to reach drawn in, how he
+  moved later (SB, WP), the out he made, and a filled diamond when he scored. Batting
+  around adds a column; runs and hits by inning at the bottom
+- 🚩 Challenges: flag any play with which team challenged and whether the call stood or
+  was overturned. An overturned call goes straight to scoring the play again; each
+  team's challenges are counted, and they show in the CSV and PDF
 - 📋 Lineups for both teams: the batter due up and the pitcher are filled in on every play,
   shorthand included, and a batter out of turn or missing from the lineup is flagged.
   Pinch hitters and pitching changes keep each slot's history

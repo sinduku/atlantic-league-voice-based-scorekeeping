@@ -1,4 +1,4 @@
-import type { GameState, Play } from "@/types/game";
+import { withForcedRunners, type GameState, type Play } from "@/types/game";
 
 // Checks a parsed play against the bases as they stand, whichever parser it
 // came from. A model will happily score "Ohtani steals home" with nobody on
@@ -14,8 +14,11 @@ export interface CheckedPlay {
   warnings: string[];
 }
 
-export function checkPlay(play: Play, state: GameState): CheckedPlay {
+export function checkPlay(parsed: Play, state: GameState): CheckedPlay {
   const warnings: string[] = [];
+  // runners pushed along by the batter or a runner behind them, when the
+  // play left them standing where someone else now is
+  const play = withForcedRunners(parsed, state);
 
   const runners = play.runners.map((r) => {
     const key = BASE_KEY[r.from as keyof typeof BASE_KEY];

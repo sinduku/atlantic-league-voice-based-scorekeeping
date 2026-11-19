@@ -39,9 +39,10 @@ export function VoiceRecorder({ onTranscriptReady, isProcessing }: VoiceRecorder
   };
 
   return (
-    <div className="flex flex-col items-center gap-6">
+    <div className="space-y-2">
+      <div className="flex items-center gap-4">
       {/* Record button */}
-      <div className="relative">
+      <div className="relative shrink-0">
         {isRecording && (
           <div className="absolute inset-0 rounded-full bg-accent/30 animate-pulse-ring" />
         )}
@@ -49,7 +50,8 @@ export function VoiceRecorder({ onTranscriptReady, isProcessing }: VoiceRecorder
           size="lg"
           onClick={isRecording ? finish : startRecording}
           disabled={isProcessing}
-          className={`w-24 h-24 rounded-full transition-all duration-300 ${
+          aria-label={isRecording ? "Stop recording" : "Record a play"}
+          className={`w-16 h-16 rounded-full transition-all duration-300 ${
             isRecording
               ? "bg-accent hover:bg-accent/90 text-accent-foreground scale-110"
               : "bg-primary hover:bg-primary/90 text-primary-foreground"
@@ -65,7 +67,8 @@ export function VoiceRecorder({ onTranscriptReady, isProcessing }: VoiceRecorder
         </Button>
       </div>
 
-      <p className="text-sm text-muted-foreground">
+      <div className="space-y-1.5 min-w-0">
+      <p className="text-sm font-medium text-foreground">
         {isProcessing
           ? "Parsing play..."
           : isRecording
@@ -79,10 +82,12 @@ export function VoiceRecorder({ onTranscriptReady, isProcessing }: VoiceRecorder
         <Switch checked={autoSend} onCheckedChange={toggleAutoSend} disabled={isRecording} />
         Send automatically when I stop talking
       </label>
+      </div>
+      </div>
 
       {/* Live transcript */}
       {transcript && (
-        <div className="w-full max-w-md bg-muted rounded-lg p-4 text-sm">
+        <div className="w-full bg-muted rounded-lg px-3 py-2 text-sm">
           <span className="text-xs uppercase tracking-wider text-muted-foreground block mb-1">
             Transcript
           </span>

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { FIELD, isBallInPlay, isHit, sprayPoint, sprayPolar } from "./sprayGeometry";
+import { BASES, FIELD, describeSpot, isBallInPlay, isHit, runnerPath, sprayPoint, sprayPolar, toPolar, toXY } from "./sprayGeometry";
 import { parseShorthand } from "./shorthand";
 import { INITIAL_GAME_STATE } from "@/types/game";
 import type { Play } from "@/types/game";
@@ -125,5 +125,48 @@ describe("sprayPolar matches the play-by-play", () => {
     const e5 = sprayPolar(parseShorthand("E5", s)!);
     expect(e5.angle).toBeLessThan(-30);
     expect(infield(e5.radius)).toBe(true);
+  });
+});
+
+describe("dragging a dot", () => {
+  it("names the spot it was dropped on in the play-by-play's words", () => {
+    expect(describeSpot(toXY(-22, 150))).toBe("left-center gap");
+    expect(describeSpot(toXY(30, 170))).toBe("deep right field");
+    expect(describeSpot(toXY(0, 115))).toBe("shallow center field");
+    expect(describeSpot(toXY(-40, 140))).toBe("left field line");
+    expect(describeSpot(toXY(-15, 90))).toBe("shortstop");
+    expect(describeSpot(toXY(0, 15))).toBe("in front of the plate");
+    expect(describeSpot(toXY(-20, FIELD.fence + 15))).toBe("over the fence in left field");
+    expect(describeSpot(toXY(-60, 120))).toMatch(/^foul territory/);
+  });
+
+  it("puts a dragged ball exactly where it was dropped", () => {
+    expect(sprayPoint(play({ hit_location: "left field", spray: { x: 42, y: 77 } }), 3)).toEqual({ x: 42, y: 77 });
+  });
+
+  it("round-trips a point through its angle and distance", () => {
+    const p = toPolar(toXY(-25, 130));
+    expect(p.angle).toBeCloseTo(-25);
+    expect(p.radius).toBeCloseTo(130);
+  });
+});
+
+describe("runner paths", () => {
+  it("follows the bases from where he started to where he ended", () => {
+    expect(runnerPath("1st", "3rd")).toEqual([BASES.first, BASES.second, BASES.third]);
+    expect(runnerPath("2nd", "home")).toEqual([BASES.second, BASES.third, FIELD.home]);
+    expect(runnerPath("home", "home")).toHaveLength(5);
+    // put out going for the next base
+    expect(runnerPath("1st", "out")).toEqual([BASES.first, BASES.second]);
+    expect(runnerPath("2nd", "2nd")).toEqual([]);
+  });
+});
+
+describe("words and dots agree", () => {
+  it("reads a dot back as the outfield words that placed it", () => {
+    for (const where of ["left field line", "left field", "left-center gap", "center field", "right-center gap", "right field", "right field line"]) {
+      const p = sprayPolar(play({ action: "double", hit_location: where }));
+      expect(describeSpot(toXY(p.angle, p.radius))).toBe(where);
+    }
   });
 });

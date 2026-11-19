@@ -4,6 +4,7 @@ import type { GameState } from "@/types/game";
 import { battingLines, battingTeam, lineScore, teamOf, type LoggedPlay, type Team } from "@/lib/boxScore";
 import { inningsPitched, pitchingLines } from "@/lib/pitching";
 import { sequence } from "@/lib/pitches";
+import { challengeLabel } from "@/lib/challenges";
 import { average, describeRunners, fileBaseName, type GameInfo } from "@/lib/exportCsv";
 import { BASES, FIELD, LEGEND, isBallInPlay, isHit, markerColor, sprayPoint, toXY } from "@/lib/sprayGeometry";
 
@@ -229,7 +230,7 @@ export function exportPdf(log: LoggedPlay[], state: GameState, info: GameInfo) {
       half(before),
       play.batter || "",
       play.action,
-      play.description,
+      play.challenge ? `${play.description}\n[${challengeLabel(play.challenge, info.teamNames)}]` : play.description,
       play.pitches?.length ? `${play.count ? `${play.count}: ` : ""}${sequence(play.pitches)}` : "",
       describeRunners(play.runners),
       play.rbi || "",

@@ -201,6 +201,8 @@ function spread(index: number): [number, number] {
 }
 
 export function sprayPoint(play: Play, index: number) {
+  // a dot the scorer dragged stays exactly where they put it
+  if (play.spray && Number.isFinite(play.spray.x) && Number.isFinite(play.spray.y)) return { x: play.spray.x, y: play.spray.y };
   const { angle, radius } = sprayPolar(play);
   const [da, dr] = spread(index);
   // keep the dot inside fair territory however it is nudged, and a home run
@@ -209,3 +211,53 @@ export function sprayPoint(play: Play, index: number) {
   const r = radius > FIELD.fence ? Math.max(FIELD.fence + 8, radius + dr) : Math.min(FIELD.fence - 4, Math.max(10, radius + dr));
   return toXY(a, r);
 }
+
+// the chart point back to an angle (0 is center field, negative is left) and
+// a distance from home
+export function toPolar(point: { x: number; y: number }): SprayPolar {
+  const dx = point.x - FIELD.home.x;
+  const dy = FIELD.home.y - point.y;
+  return { angle: (Math.atan2(dx, dy) * 180) / Math.PI, radius: Math.hypot(dx, dy) };
+}
+
+// Words for a spot on the chart, in the same terms the play-by-play uses, so
+// a dot dragged to the left-center gap reads "left-center gap" in the log
+export function describeSpot(point: { x: number; y: number }): string {
+  const { angle, radius } = toPolar(point);
+  if (Math.abs(angle) > 45 || point.y > FIELD.home.y) return `foul territory, ${angle < 0 ? "third" : "first"} base side`;
+  if (radius > FIELD.fence) {
+    const side = angle < -15 ? "left field" : angle > 15 ? "right field" : "center field";
+    return `over the fence in ${side}`;
+  }
+  if (radius < 26) return "in front of the plate";
+  if (radius < FIELD.dirt) {
+    if (radius < 58 && Math.abs(angle) < 12) return "pitcher";
+    if (angle < -27) return "third base";
+    if (angle < -6) return "shortstop";
+    if (angle <= 6) return "up the middle";
+    if (angle <= 27) return "second base";
+    return "first base";
+  }
+  const depth = radius < 125 ? "shallow " : radius > 162 ? "deep " : "";
+  const where =
+    // halfway between the angles sprayPolar draws each of these at, so a dot
+    // left where the words put it reads back the same words
+    angle < -36 ? "left field line" : angle < -25.5 ? "left field" : angle < -11 ? "left-center gap" : angle <= 11 ? "center field" : angle <= 25.5 ? "right-center gap" : angle <= 36 ? "right field" : "right field line";
+  return depth + where;
+}
+
+// home, the three bases and home again: the path a runner takes
+const BASE_PATH = ["home", "1st", "2nd", "3rd", "home"] as const;
+const BASE_POINTS: Record<string, { x: number; y: number }> = { home: FIELD.home, "1st": BASES.first, "2nd": BASES.second, "3rd": BASES.third };
+
+// the points a runner passes going from one base to another, home last when
+// he scores; a runner put out is drawn to the base he was going for
+export function runnerPath(from: string, to: string): { x: number; y: number }[] {
+  const start = from === "home" ? 0 : BASE_PATH.indexOf(from as (typeof BASE_PATH)[number]);
+  if (start < 0) return [];
+  const end = to === "out" ? Math.min(start + 1, 4) : to === "home" ? 4 : BASE_PATH.indexOf(to as (typeof BASE_PATH)[number], 1);
+  if (end <= start) return [];
+  return BASE_PATH.slice(start, end + 1).map((b) => BASE_POINTS[b]);
+}
+
+export const basePoint = (base: "first" | "second" | "third") => BASES[base];

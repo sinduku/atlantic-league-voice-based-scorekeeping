@@ -45,6 +45,20 @@ export interface Play {
   // B ball, C called strike, S swinging strike, F foul, T foul tip, X in
   // play, H hit by pitch. Missing on plays scored without pitches
   pitches?: string[] | null;
+  // where the scorer dragged the ball on the spray chart, in the chart's
+  // own units; when set it wins over the spot worked out from the words
+  spray?: { x: number; y: number; was?: string | null } | null;
+  // a manager's challenge of the call on this play, and how it came out
+  challenge?: Challenge | null;
+}
+
+export interface Challenge {
+  // the team that challenged
+  team: "away" | "home";
+  // "stands": the call on the field was upheld; "overturned": it was
+  // reversed, and the play was scored again the way the review saw it
+  result: "stands" | "overturned";
+  note?: string | null;
 }
 
 export const INITIAL_GAME_STATE: GameState = {
@@ -145,6 +159,53 @@ export function runnersAfter(state: GameState, play: Play): GameState["runners"]
   }
 
   return runners;
+}
+
+// A runner can't share a base. When the batter, or another runner, takes a
+// base whose runner the play doesn't move, that runner is forced up one, and
+// so on ahead of him. A parser reading "Soto walks" with the bases loaded
+// often moves only the batter; without this the runner on first vanished
+// and the run forced in from third never scored. Runners the play does move
+// are left as they are, so this only ever fills in the forced minimum.
+const FORCED_RBI = new Set(["walk", "hit by pitch", "single", "double", "triple"]);
+const BASES = ["1st", "2nd", "3rd"] as const;
+const KEYS = { "1st": "first", "2nd": "second", "3rd": "third" } as const;
+
+export function withForcedRunners(play: Play, state: GameState): Play {
+  const action = play.action.toLowerCase();
+  // a home run brings in everyone on base, listed or not, and the batter: each
+  // of them is a run for the box score and an rbi for the batter
+  if (action === "home run") {
+    const listed = new Set(play.runners.map((r) => r.from));
+    const added: Play["runners"] = BASES.filter((b) => state.runners[KEYS[b]] && !listed.has(b)).map((b) => {
+      const name = state.runners[KEYS[b]]!;
+      return { from: b, to: "home", runner: name.toLowerCase() === "runner" ? null : name };
+    });
+    if (!listed.has("home")) added.push({ from: "home", to: "home", runner: play.batter ?? null });
+    if (!added.length) return play;
+    const runners = [...play.runners, ...added].sort((a, b) => (a.from === "home" ? 9 : -BASES.indexOf(a.from as (typeof BASES)[number])) - (b.from === "home" ? 9 : -BASES.indexOf(b.from as (typeof BASES)[number])));
+    const crossed = runners.filter((r) => r.to === "home").length;
+    return { ...play, runners, rbi: Math.max(play.rbi || 0, crossed) };
+  }
+  const moved = new Set(play.runners.map((r) => r.from));
+  const coming = new Set(play.runners.filter((r) => r.to !== "out" && r.to !== "home").map((r) => r.to));
+  if (!moved.has("home")) {
+    const reach = actionToBase(action);
+    if (reach) coming.add(reach === "first" ? "1st" : reach === "second" ? "2nd" : "3rd");
+  }
+  const added: Play["runners"] = [];
+  BASES.forEach((base, i) => {
+    const runner = state.runners[KEYS[base]];
+    if (!runner || moved.has(base) || !coming.has(base)) return;
+    const to = BASES[i + 1] ?? "home";
+    added.push({ from: base, to, runner: runner.toLowerCase() === "runner" ? null : runner });
+    coming.add(to);
+  });
+  if (!added.length) return play;
+  const forcedIn = added.some((r) => r.to === "home") && FORCED_RBI.has(action) ? 1 : 0;
+  // lead runner first, the way the parsers list them
+  const order = (r: Play["runners"][number]) => (r.from === "home" ? 9 : -BASES.indexOf(r.from as (typeof BASES)[number]));
+  return { ...play, runners: [...play.runners, ...added].sort((a, b) => order(a) - order(b)), rbi: (play.rbi || 0) + forcedIn };
 }
 
 // Every runner who crosses the plate counts, not just the ones credited as
