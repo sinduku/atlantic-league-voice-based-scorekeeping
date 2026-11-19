@@ -34,6 +34,8 @@ interface LineupPanelProps {
   onChange: (team: Team, lineup: TeamLineup) => void;
   onMarkDueUp: (team: Team, slot: number) => void;
   onPitch: (team: Team, pitcher: string, delta: number) => void;
+  // inside another card (the Lineups tab): no frame or heading of its own
+  bare?: boolean;
 }
 
 export function LineupPanel(props: LineupPanelProps) {
@@ -51,8 +53,8 @@ export function LineupPanel(props: LineupPanelProps) {
   const order = lineups[batting];
 
   return (
-    <div className="bg-card border rounded-xl p-6 space-y-4">
-      <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Lineups</h2>
+    <div className={props.bare ? "space-y-4" : "bg-card border rounded-xl p-6 space-y-4"}>
+      {!props.bare && <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Lineups</h2>}
 
       {/* the matchup now, with the pitch counter where a thumb can reach it */}
       <div className="grid gap-3 sm:grid-cols-2">

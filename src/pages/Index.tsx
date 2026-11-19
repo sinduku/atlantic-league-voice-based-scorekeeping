@@ -866,7 +866,7 @@ const Index = () => {
           and the scorecard in the middle, the play-by-play and lineups on the
           right. Each column scrolls on its own if it has to, the page never
           does. Phones stack the columns in the same order */}
-      <main className="flex-1 min-h-0 grid grid-cols-1 gap-3 p-3 lg:grid-cols-[22rem_minmax(0,1fr)] xl:grid-cols-[23rem_minmax(0,1fr)_24rem] 2xl:grid-cols-[26rem_minmax(0,1fr)_28rem]">
+      <main className="flex-1 min-h-0 grid grid-cols-1 gap-3 p-3 lg:grid-cols-[22rem_minmax(0,1fr)] xl:grid-cols-[minmax(22rem,1fr)_minmax(0,1.5fr)_minmax(24rem,1.25fr)]">
         {/* ------------------------------------------------ scoring */}
         <section className="min-h-0 flex flex-col gap-3 lg:overflow-y-auto lg:pr-0.5" aria-label="Score a play">
           <Scoreboard
@@ -1045,7 +1045,7 @@ const Index = () => {
                 </div>
               )}
             </div>
-            <TabsContent value="spray" className="mt-0 flex-1 min-h-0 overflow-y-auto">
+            <TabsContent value="spray" className="mt-0 flex-1 min-h-0 overflow-y-auto data-[state=inactive]:hidden">
               <SprayChart
                 plays={confirmedPlays}
                 teamNames={shownTeams}
@@ -1057,7 +1057,7 @@ const Index = () => {
                 bare
               />
             </TabsContent>
-            <TabsContent value="scorecard" className="mt-0 flex-1 min-h-0 overflow-auto">
+            <TabsContent value="scorecard" className="mt-0 flex-1 min-h-0 overflow-auto data-[state=inactive]:hidden">
               <Scorecard
                 log={log}
                 state={gameState}
@@ -1090,7 +1090,7 @@ const Index = () => {
               )}
             </div>
 
-            <TabsContent value="plays" className="mt-0 flex-1 min-h-0 flex flex-col">
+            <TabsContent value="plays" className="mt-0 flex-1 min-h-0 flex flex-col data-[state=inactive]:hidden">
               {(challenges.away.used > 0 || challenges.home.used > 0) && (
                 <p className="text-xs text-muted-foreground mb-2">
                   Challenges: {(["away", "home"] as Team[])
@@ -1227,6 +1227,7 @@ const Index = () => {
                 keyed by game so a reset opens both cards for entry again */}
             <TabsContent value="lineups" forceMount className="mt-0 flex-1 min-h-0 overflow-y-auto data-[state=inactive]:hidden">
               <LineupPanel
+                bare
                 key={startedAt}
                 lineups={lineups}
                 teamNames={shownTeams}
